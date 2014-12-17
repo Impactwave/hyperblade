@@ -1,6 +1,8 @@
 <?php
 namespace cwplugins\hyperbladePlugin;
 
+use Blade;
+
 /**
  * Extension to the Blade templating engine.
  */

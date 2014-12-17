@@ -1,0 +1,20 @@
+{
+    "name": "cwplugins/hyperblade-plugin",
+    "description": "Hyperblade templating engine",
+    "version": "dev-master",
+    "authors": [
+        {
+            "name": "Impactwave",
+            "email": "impactwave@impactwave.com"
+        }
+    ],
+    "require": {
+        "php": ">=5.4.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "cwplugins\\hyperbladePlugin\\": "src/"
+        }
+    },
+    "minimum-stability": "dev"
+}

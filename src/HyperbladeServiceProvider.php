@@ -1,9 +1,9 @@
 <?php
-namespace cwplugins\hyperbladePlugin;
+namespace contentwave\hyperblade;
 
 use App\Providers\PackageServiceProvider as ServiceProvider;
 
-class HyperbladePluginServiceProvider extends ServiceProvider
+class HyperbladeServiceProvider extends ServiceProvider
 {
   /**
    * Indicates if loading of the provider is deferred.

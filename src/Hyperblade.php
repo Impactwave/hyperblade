@@ -1,5 +1,5 @@
 <?php
-namespace cwplugins\hyperbladePlugin;
+namespace contentwave\hyperblade;
 
 use Blade;
 
@@ -30,7 +30,7 @@ class Hyperblade
     });
 
     /*
-     * Blade components.
+     * Hyperblade components and mixins.
      *
      * Bind prefix to namespace:
      *   Syntax: xmlns:prefix="namespace\ClassName"
@@ -42,7 +42,7 @@ class Hyperblade
      * Invokes Class::method (array attributes, string html, string indentSpace),
      * where Class is a class previously bound to the prefix via a xml namespace declaration.
      *
-     * Attribute directive:
+     * Mixins:
      *   Syntax: <sometag prefix:method="value" prefix:method="(arg1,...)">
      * The first attribute syntax calls Class::method(string indentSpace,string value)
      * The second attribute syntax calls Class::method(string indentSpace,arg1,...)
@@ -56,7 +56,7 @@ class Hyperblade
         self::$ns[$prefix] = $value;
       }, $view);
 
-      // Attribute directives.
+      // Mixins
 
       $view = preg_replace_callback ('/(\s+)([\w\-]+):([\w\-]+)\s*=\s*(["\'])(.*?)\\4/', function ($match) {
         list ($all, $space, $prefix, $method, $quote, $value) = $match;
@@ -79,7 +79,7 @@ class Hyperblade
         return "<?php echo $class::$method($value) ?>";
       }, $view);
 
-      // Components.
+      // Components
 
       return preg_replace_callback ('/([ \t]*)<(\w+):([\w\-]+)\s*(.*?)>\s*(.*?)<\/\\2:\\3>/s',
         function ($match) {

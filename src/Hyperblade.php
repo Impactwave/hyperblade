@@ -1,72 +1,105 @@
 <?php
 namespace contentwave\hyperblade;
 
-use Blade, RuntimeException;
+use Blade, RuntimeException, Illuminate\Support\Str;
+
+/**
+ * Each view has a compilation context. Recursive compilations in the same view reuse the same context.
+ */
+class Compilationcontext
+{
+  public $ns = array();
+  public $alias = array();
+  public $MACRO_PREFIX = '@@';
+  public $ALIAS_DELIMITER = ':';
+  public $BODY_START = ':';
+
+  private $ns_low = array();
+  private $alias_low = array();
+
+  public function registerAlias ($alias, $class)
+  {
+    $alias_low = strtolower ($alias);
+    if (isset($this->alias_low[$alias_low]))
+      throw new RuntimeException("Macro alias '$alias' conflicts with a XML prefix with the same name.");
+    if (isset($this->alias[$alias]))
+      throw new RuntimeException("Multiple declarations for the same macro alias '$alias' are not allowed.");
+    $this->alias[$alias] = $class;
+    $this->alias_low[$alias_low] = true;
+  }
+
+  public function registerNamespace ($prefix, $namespace)
+  {
+    $prefix_low = strtolower ($prefix);
+    if (isset($this->ns_low[$prefix_low]))
+      throw new RuntimeException("XML prefix '$prefix' conflicts with a macro class alias with the same name.");
+    if (isset($this->ns[$prefix]))
+      throw new RuntimeException("Multiple declarations for the same XML prefix '$prefix' are not allowed.");
+    $this->ns[$prefix] = $namespace;
+    $this->ns_low[$prefix_low] = true;
+  }
+
+}
 
 /**
  * An extension to the Blade templating engine.
  */
 class Hyperblade
 {
-  public static $MACRO_PREFIX = '@@';
-  public static $ALIAS_DELIMITER = ':';
-  public static $BODY_START = ':';
-
-  private static $ns = array();
-  private static $alias = array();
-
   public static function register ()
   {
-    Blade::extend (function ($view) {
+    $compile = function ($view, Compilationcontext $ctx) use (&$compile) {
 
       /*
        * Defines a class alias for use with macros.
        *
        *   Syntax: @use(className[ as alias])
        *
-       * 'className' is a fully qualified class name; ex: my\namespace\myClass or just myClass.
+       * `className` is a fully qualified class name; ex: my\namespace\myClass or just myClass.
        * If no alias is specified, the default nameless alias will be set.
        */
 
-      $view = preg_replace_callback ('/(?<!\w)(\s*)@use\s*\(\s*(\S+)\s*(?:as\s*(\w+)\s*)?\)/m',
-        function ($match) {
+      $view = preg_replace_callback ('/(?<!\w)(\s*)@use\s*\(\s*(\S+)\s*(?:as\s*(\w+)\s*)?\)\s*$/m',
+        function ($match) use ($ctx) {
           $match[] = ''; // the default namespace.
           list ($all, $space, $class, $alias) = $match;
-          self::$alias[$alias] = $class;
+          $ctx->registerAlias ($alias, $class);
           return $space;
         }, $view);
+
+      $keys = array_keys ($ctx->alias);
+      if (count($keys) && !(count($keys) == 1 && isset($ctx->alias[''])))
+        $view = "<?php\n" . implode ('\n', array_map (function ($alias, $namespace) {
+            return $alias ? "use $namespace as $alias;\n" : '';
+          }, $keys, array_values ($ctx->alias))) . '?>' . $view;
 
       /*
        * Simple macros invoke a method and output its result.
        *
        *   Syntax: @@[alias:]method [(args)]
        *
-       * Generated code:
+       * Generated code (simplified):
        *
-       *   {{ class::method (args) }}
+       *   class::method (args)
        *
        * Arguments and parenthesis are optional; ex: @@a:b instead of @@a:b()
-       * 'alias' must have been previously bound to a class using @use.
+       * `alias` must have been previously bound to a class using @use.
        * If an alias is not specified, the default nameless alias is assumed.
        */
 
-      $view = preg_replace_callback ('/(?<!\w)(\s*)' . self::$MACRO_PREFIX . '((?:([\w\\\\]+)' . self::$ALIAS_DELIMITER .
-        ')?(\w+))\s*(?:\((.*?)\))?\s*(:)?\s*$(.*?' . self::$MACRO_PREFIX . 'end\2)?/ms',
-        function ($match) {
-          array_push ($match, 0); // allow $args. $colon and $close to be undefined.
-          array_push ($match, 0);
-          array_push ($match, 0);
-          list ($all, $space, $fullName, $alias, $method, $args, $colon, $close) = $match;
-          if ($colon) return $all; // Skip macro blocks.
-          if ($close)
-            throw new RuntimeException ("Missing colon after macro block start @@$fullName($args)");
-          if (!isset(self::$alias[$alias])) {
-            $alias = $alias ? "Alias '$alias'" : "The default alias";
-            throw new RuntimeException("$alias is not bound to a class.");
-          }
-          $class = self::$alias[$alias];
-          return "$space<?php echo $class::$method($args) ?>";
-        }, $view);
+      $view =
+        preg_replace_callback ('/(?<!\w)(\s*)' . $ctx->MACRO_PREFIX . '((?:([\w\\\\]+)' . $ctx->ALIAS_DELIMITER .
+          ')?(\w+))(?:\s*\((.*?)\))?(?!\s*' . $ctx->BODY_START . ')/s',
+          function ($match) use ($ctx) {
+            array_push ($match, ''); // allow $args to be undefined.
+            list ($all, $space, $fullName, $alias, $method, $args) = $match;
+            if (!isset($ctx->alias[$alias])) {
+              $alias = $alias ? "Alias '$alias'" : "The default alias";
+              throw new RuntimeException("$alias is not bound to a class.");
+            }
+            $class = $ctx->alias[$alias];
+            return "$space<?php echo $class::$method($args) ?> "; //trailing space is needed for formatting.
+          }, $view);
 
       /*
        * Block macros invoke a method and output its result, but they also support a block of content and source code
@@ -78,50 +111,64 @@ class Hyperblade
        *     html markup
        *   @@end[alias:]method
        *
-       * Generated code:
+       * Generated code (simplified):
        *
-       *   {{ class::method (indentSpace,html,args...) }}
+       *   class::method (indentSpace,html,args...)
        *
        * Arguments and parenthesis are optional; ex: @@a:b instead of @@a:b()
-       * 'alias' must have been previously bound to a class using @use.
+       * `alias` must have been previously bound to a class using @use.
        * If an alias is not specified, the default alias/namespace is assumed.
        * indentSpace is a white space string corresponding to the indentation level of this block.
        */
 
-      $view = preg_replace_callback ('/(?<!\w)(\s*)^([ \t]*)' . self::$MACRO_PREFIX . '((?:([\w\\\]+)' .
-        self::$ALIAS_DELIMITER . ')?(\w+))\s*(?:\((.*?)\))?\s*' . self::$BODY_START . '\s*(.*?)' . self::$MACRO_PREFIX . 'end\3/sm',
-        function ($match) {
+      $view = preg_replace_callback ('/(?<!\w)(\s*)^([ \t]*)' . $ctx->MACRO_PREFIX . '((?:([\w\\\]+)' .
+        $ctx->ALIAS_DELIMITER . ')?(\w+))(?:\s*\((.*?)\))?\s*' . $ctx->BODY_START . '\s*(.*?)' . $ctx->MACRO_PREFIX .
+        'end\3/sm',
+        function ($match) use (&$compile, $ctx) {
           list ($all, $space, $indentSpace, $fullName, $alias, $method, $args, $content) = $match;
-          if (!isset(self::$alias[$alias])) {
+          if (!isset($ctx->alias[$alias])) {
             $alias = $alias ? "Alias '$alias'" : "The default alias";
             throw new RuntimeException("$alias is not bound to a class.");
           }
-          $class = self::$alias[$alias];
+          $class = $ctx->alias[$alias];
           if ($args != '')
             $args = ",$args";
-          $content = trim ($content);
+          $content = trim ($compile ($content));
           return "$space<?php ob_start() ?>$content<?php echo $class::$method('$indentSpace',ob_get_clean()$args) ?>";
         }, $view);
 
       /*
-       * Namespace declarations bind a XML prefix to a PHP class.
+       * Namespace declarations bind a XML prefix to a PHP namespace.
        * They can be an attribute of any tag in the template, but they also may appear in comments (or even strings,
        * so beware!).
        *
        * Syntax:
        *
-       *   <sometag ... xmlns:prefix="namespace\class" ...>
+       *   <sometag ... xmlns:prefix="namespace" ...>
        *
        * Ex:
        *
-       *   <div xmlns:form="ns1\ns2\Form">
+       *   <div xmlns:form="ns1\ns2\forms">
+       *
+       * `prefix` can be dash-cased.
        */
       //
+      $view = preg_replace_callback ('/\bxmlns:([\w\-]+)\s*=\s*(["\'])(.*?)\\2\s*/',
+        function ($match) use ($ctx) {
+          list ($all, $prefix, $quote, $value) = $match;
+          if (!preg_match ('/^[\w\\\]*$/', $value))
+            throw new RuntimeException("xml:$prefix=\"$value\" declares an invalid PHP namespace.");
+          $prefix = Str::camel ($prefix);
+          if (isset($ctx->ns[$prefix]))
+            throw new RuntimeException("Multiple declarations for the same XML prefix '$prefix' are not allowed.");
+          $ctx->registerNamespace ($prefix, $value);
+          return ''; //suppress attribute
+        }, $view);
 
-      $view = preg_replace_callback ('/\bxmlns:([\w\-]+)\s*=\s*(["\'])(.*?)\\2/', function ($match) {
-        list ($all, $prefix, $quote, $value) = $match;
-        self::$ns[$prefix] = $value;
-      }, $view);
+      if (!empty($ctx->ns))
+        $view = "<?php\n" . implode ('\n', array_map (function ($prefix, $namespace) {
+            return "use $namespace as $prefix;\n";
+          }, array_keys ($ctx->ns), array_values ($ctx->ns))) . '?>' . $view;
 
       /*
        * Hyperblade mixins transform attributes into something else.
@@ -133,15 +180,15 @@ class Hyperblade
        * The first attribute syntax calls Class::method(string indentSpace,string value)
        * The second attribute syntax calls Class::method(string indentSpace,arg1,...)
        * The method name should be specified in dash case;; it will be converted to a camel cased method name.
+       * `prefix` can be dash-cased.
        */
 
-      $view = preg_replace_callback ('/(\s+)([\w\-]+):([\w\-]+)\s*=\s*(["\'])(.*?)\\4/', function ($match) {
+      $view = preg_replace_callback ('/(\s+)([\w\-]+):([\w\-]+)\s*=\s*(["\'])(.*?)\\4/', function ($match) use ($ctx) {
         list ($all, $space, $prefix, $method, $quote, $value) = $match;
-        if (!isset(self::$ns[$prefix]))
+        if (!isset($ctx->ns[$prefix]))
           throw new RuntimeException("XML prefix '$prefix' is not bound to a class.");
-        $class = self::$ns[$prefix];
-        // Convert dash-case to camel-case.
-        $method = lcfirst (str_replace (' ', '', ucwords (str_replace ('-', ' ', $method))));
+        $class = $ctx->ns[$prefix];
+        $method = Str::camel ($method);
         if (!empty($value)) {
           switch ($value[0]) {
             case '(':
@@ -155,33 +202,62 @@ class Hyperblade
         return "<?php echo $class::$method($value) ?>";
       }, $view);
 
+
       /*
        * Hyperblade components transform tags and their contents into something else.
        *
        * Syntax:
        *
-       *   <prefix:method [attr1="", ...]>html markup</prefix:method>
+       *   <prefix:class [attr1="", ...]>html markup</prefix:class>
        *
-       * Invokes Class::method (array attributes, string html, string indentSpace),
-       * where Class is a class previously bound to the prefix via a xml namespace declaration.
-       * The method name should be specified in dash case;; it will be converted to a camel cased method name.
+       * Ex:
+       *
+       *   <form:super-field name="field1">
+       *     <input type="text">
+       *   </form:super-field>
+       *
+       *   will be compiled to (simplified example):
+       *
+       *   (new namespace\class(array attributes, string html, string indentSpace))->render();
+       *
+       * Creates a new instance of a namespace\class where:
+       *   - `namespace` is a previously registered namespace for the given `prefix`.
+       *   - `class` is a class name written in dash-case.
+       *
+       * If you want automatic support for converting attributes to class properties and other advanced functionality,
+       * your class should subclass `contentwave\hyperblade\Component`.
+       * `prefix` can be dash-cased.
        */
-
-      $view = preg_replace_callback ('/(?<!\w)(\s*)^([ \t]*)<(\w+):([\w\-]+)\s*(.*?)>\s*(.*?)<\/\\3:\\4>/sm',
-        function ($match) {
-          list ($all, $space, $indentSpace, $prefix, $tag, $attrs, $content) = $match;
-          if (!isset(self::$ns[$prefix]))
-            throw new RuntimeException("XML prefix '$prefix' is not bound to a class.");
-          $class = self::$ns[$prefix];
+      $view = preg_replace_callback ('/
+        (^\s*)?                 # capture white space from the beginning of the line
+        <([\w\-]+):([\w\-]+)    # match and capture <prefix:tag
+        \s*(.*?)                # capture attributes
+        >\s*                    # match > and remaining white space
+        (                       # capture tag content
+          (?:                   # loop begin
+            (?R)                # either recurse
+          |                     # or
+            (?! <\/\\2:\\3>).   # consume one char until the closing tag is reached
+          )*                    # repeat
+        )
+        <\/\\2:\\3>             # consume the closing tag
+      /smx',
+        function ($match) use (&$compile, $ctx) {
+          list ($all, $space, $prefix, $tag, $attrs, $content) = $match;
+          if (!isset($ctx->ns[$prefix]))
+            throw new RuntimeException("XML prefix '$prefix' is not bound to a namespace.");
+          $class = Str::camel ($prefix) . '\\' . ucfirst (Str::camel ($tag));
           $attrs = preg_replace ('/(?<=["\'])\s+(?=\w)/', ',', $attrs);
           $attrs = preg_replace ('/([\w\-]+)\s*=\s*(["\'])(.*?)\\2/', '\'$1\'=>$2$3$2', $attrs);
-          // Convert dash-case to camel-case.
-          $method = lcfirst (str_replace (' ', '', ucwords (str_replace ('-', ' ', $tag))));
-          $content = trim ($content);
-          return "$space<?php ob_start() ?>$content<?php echo $class::$method('$indentSpace',ob_get_clean(),array($attrs)) ?>";
+          $content = $compile ($content, $ctx);
+          return "$space<?php ob_start() ?>$content<?php echo (new $class(array($attrs),ob_get_clean(),'$space'))->render(); ?>";
         }, $view);
 
       return $view;
+    };
+
+    Blade::extend (function ($view) use (&$compile) {
+      return $compile ($view, new Compilationcontext);
     });
 
   }

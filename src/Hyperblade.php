@@ -4,51 +4,53 @@ namespace contentwave\hyperblade;
 use Blade, RuntimeException;
 
 /**
- * Extension to the Blade templating engine.
+ * An extension to the Blade templating engine.
  */
 class Hyperblade
 {
   public static $MACRO_PREFIX = '@@';
   public static $ALIAS_DELIMITER = ':';
+  public static $BODY_START = ':';
 
   private static $ns = array();
+  private static $alias = array();
 
   public static function register ()
   {
-    /*
-     * Defines a class alias for use with macros or components/mixins.
-     * This is an alternate syntax to a xmlns:alias="className" declaration.
-     *
-     *   Syntax: @use(className[ as alias])
-     *
-     * 'className' is a fully qualified class name; ex: my\namespace\myClass or just myClass.
-     * If no alias is specified, the default alias/namespace will be set.
-     */
     Blade::extend (function ($view) {
-      return preg_replace_callback ('/(?<!\w)(\s*)@use\s*\(\s*(\S+)\s*(?:as\s*(\w+)\s*)?\)/m',
+
+      /*
+       * Defines a class alias for use with macros.
+       *
+       *   Syntax: @use(className[ as alias])
+       *
+       * 'className' is a fully qualified class name; ex: my\namespace\myClass or just myClass.
+       * If no alias is specified, the default nameless alias will be set.
+       */
+
+      $view = preg_replace_callback ('/(?<!\w)(\s*)@use\s*\(\s*(\S+)\s*(?:as\s*(\w+)\s*)?\)/m',
         function ($match) {
           $match[] = ''; // the default namespace.
           list ($all, $space, $class, $alias) = $match;
-          self::$ns[$alias] = $class;
+          self::$alias[$alias] = $class;
           return $space;
         }, $view);
-    });
 
-    /*
-     * Short macro syntax; invokes a method and outputs its result.
-     *
-     *   Syntax: @@[alias:]method [(args)]
-     *
-     * Generated code:
-     *
-     *   {{ class::method (args) }}
-     *
-     * Parenthesis are optional; ex: @@a::b instead of @@a::b()
-     * 'alias' must have been set previously using @use or a xmlns declaration.
-     * If an alias is not specified, the default alias/namespace is assumed.
-     */
-    Blade::extend (function ($view) {
-      return preg_replace_callback ('/(?<!\w)(\s*)' . self::$MACRO_PREFIX . '((?:([\w\\\\]+)' . self::$ALIAS_DELIMITER .
+      /*
+       * Simple macros invoke a method and output its result.
+       *
+       *   Syntax: @@[alias:]method [(args)]
+       *
+       * Generated code:
+       *
+       *   {{ class::method (args) }}
+       *
+       * Arguments and parenthesis are optional; ex: @@a:b instead of @@a:b()
+       * 'alias' must have been previously bound to a class using @use.
+       * If an alias is not specified, the default nameless alias is assumed.
+       */
+
+      $view = preg_replace_callback ('/(?<!\w)(\s*)' . self::$MACRO_PREFIX . '((?:([\w\\\\]+)' . self::$ALIAS_DELIMITER .
         ')?(\w+))\s*(?:\((.*?)\))?\s*(:)?\s*$(.*?' . self::$MACRO_PREFIX . 'end\2)?/ms',
         function ($match) {
           array_push ($match, 0); // allow $args. $colon and $close to be undefined.
@@ -58,78 +60,80 @@ class Hyperblade
           if ($colon) return $all; // Skip macro blocks.
           if ($close)
             throw new RuntimeException ("Missing colon after macro block start @@$fullName($args)");
-          if (!isset(self::$ns[$alias])) {
+          if (!isset(self::$alias[$alias])) {
             $alias = $alias ? "Alias '$alias'" : "The default alias";
             throw new RuntimeException("$alias is not bound to a class.");
           }
-          $class = self::$ns[$alias];
+          $class = self::$alias[$alias];
           return "$space<?php echo $class::$method($args) ?>";
         }, $view);
-    });
 
-    /*
-     * Hyperblade macros.
-     *
-     * Syntax:
-     *
-     *   @@[alias:]method [(args)]:
-     *     html markup
-     *   @@end[alias:]method
-     *
-     * Generated code:
-     *
-     *   {{ class::method (indentSpace,html,args...) }}
-     *
-     * Args (and parenthesis) are optional.
-     * 'alias' must have been set previously using @use or a xmlns declaration.
-     * If an alias is not specified, the default alias/namespace is assumed.
-     * indentSpace is a white space string corresponding to the indentation level of this block.
-     */
-    Blade::extend (function ($view) {
-      return preg_replace_callback ('/(?<!\w)(\s*)^([ \t]*)' . self::$MACRO_PREFIX . '((?:([\w\\\]+)' .
-        self::$ALIAS_DELIMITER . ')?(\w+))\s*(?:\((.*?)\))?\s*:\s*(.*?)' . self::$MACRO_PREFIX . 'end\3/sm',
+      /*
+       * Block macros invoke a method and output its result, but they also support a block of content and source code
+       * indentation.
+       *
+       * Syntax:
+       *
+       *   @@[alias:]method [(args)]:
+       *     html markup
+       *   @@end[alias:]method
+       *
+       * Generated code:
+       *
+       *   {{ class::method (indentSpace,html,args...) }}
+       *
+       * Arguments and parenthesis are optional; ex: @@a:b instead of @@a:b()
+       * 'alias' must have been previously bound to a class using @use.
+       * If an alias is not specified, the default alias/namespace is assumed.
+       * indentSpace is a white space string corresponding to the indentation level of this block.
+       */
+
+      $view = preg_replace_callback ('/(?<!\w)(\s*)^([ \t]*)' . self::$MACRO_PREFIX . '((?:([\w\\\]+)' .
+        self::$ALIAS_DELIMITER . ')?(\w+))\s*(?:\((.*?)\))?\s*' . self::$BODY_START . '\s*(.*?)' . self::$MACRO_PREFIX . 'end\3/sm',
         function ($match) {
           list ($all, $space, $indentSpace, $fullName, $alias, $method, $args, $content) = $match;
-          if (!isset(self::$ns[$alias])) {
+          if (!isset(self::$alias[$alias])) {
             $alias = $alias ? "Alias '$alias'" : "The default alias";
             throw new RuntimeException("$alias is not bound to a class.");
           }
-          $class = self::$ns[$alias];
+          $class = self::$alias[$alias];
           if ($args != '')
             $args = ",$args";
           $content = trim ($content);
           return "$space<?php ob_start() ?>$content<?php echo $class::$method('$indentSpace',ob_get_clean()$args) ?>";
         }, $view);
-    });
 
-    /*
-     * Hyperblade components and mixins.
-     *
-     * Bind prefix to namespace:
-     *   Syntax: xmlns:prefix="namespace\ClassName"
-     * Can be an attribute of any tag in the template, or it may appear in a comment.
-     *
-     * Component element:
-     *   Syntax: <prefix:method [attr1="", ...]>html markup</prefix:method>
-     *
-     * Invokes Class::method (array attributes, string html, string indentSpace),
-     * where Class is a class previously bound to the prefix via a xml namespace declaration.
-     *
-     * Mixins:
-     *   Syntax: <sometag prefix:method="value" prefix:method="(arg1,...)">
-     * The first attribute syntax calls Class::method(string indentSpace,string value)
-     * The second attribute syntax calls Class::method(string indentSpace,arg1,...)
-     */
-    Blade::extend (function ($view) {
-
-      // Namespace declarations.
+      /*
+       * Namespace declarations bind a XML prefix to a PHP class.
+       * They can be an attribute of any tag in the template, but they also may appear in comments (or even strings,
+       * so beware!).
+       *
+       * Syntax:
+       *
+       *   <sometag ... xmlns:prefix="namespace\class" ...>
+       *
+       * Ex:
+       *
+       *   <div xmlns:form="ns1\ns2\Form">
+       */
+      //
 
       $view = preg_replace_callback ('/\bxmlns:([\w\-]+)\s*=\s*(["\'])(.*?)\\2/', function ($match) {
         list ($all, $prefix, $quote, $value) = $match;
         self::$ns[$prefix] = $value;
       }, $view);
 
-      // Mixins
+      /*
+       * Hyperblade mixins transform attributes into something else.
+       *
+       * Syntax:
+       *
+       *   <tag prefix:method="value" prefix:method="(arg1,...)">
+       *
+       * The first attribute syntax calls Class::method(string indentSpace,string value)
+       * The second attribute syntax calls Class::method(string indentSpace,arg1,...)
+       * The method name should be specified in dash case;; it will be converted to a camel cased method name.
+       */
 
       $view = preg_replace_callback ('/(\s+)([\w\-]+):([\w\-]+)\s*=\s*(["\'])(.*?)\\4/', function ($match) {
         list ($all, $space, $prefix, $method, $quote, $value) = $match;
@@ -151,9 +155,19 @@ class Hyperblade
         return "<?php echo $class::$method($value) ?>";
       }, $view);
 
-      // Components
+      /*
+       * Hyperblade components transform tags and their contents into something else.
+       *
+       * Syntax:
+       *
+       *   <prefix:method [attr1="", ...]>html markup</prefix:method>
+       *
+       * Invokes Class::method (array attributes, string html, string indentSpace),
+       * where Class is a class previously bound to the prefix via a xml namespace declaration.
+       * The method name should be specified in dash case;; it will be converted to a camel cased method name.
+       */
 
-      return preg_replace_callback ('/(?<!\w)(\s*)^([ \t]*)<(\w+):([\w\-]+)\s*(.*?)>\s*(.*?)<\/\\3:\\4>/sm',
+      $view = preg_replace_callback ('/(?<!\w)(\s*)^([ \t]*)<(\w+):([\w\-]+)\s*(.*?)>\s*(.*?)<\/\\3:\\4>/sm',
         function ($match) {
           list ($all, $space, $indentSpace, $prefix, $tag, $attrs, $content) = $match;
           if (!isset(self::$ns[$prefix]))
@@ -166,6 +180,8 @@ class Hyperblade
           $content = trim ($content);
           return "$space<?php ob_start() ?>$content<?php echo $class::$method('$indentSpace',ob_get_clean(),array($attrs)) ?>";
         }, $view);
+
+      return $view;
     });
 
   }

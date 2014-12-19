@@ -6,37 +6,61 @@ use Blade, RuntimeException, Illuminate\Support\Str;
 /**
  * Each view has a compilation context. Recursive compilations in the same view reuse the same context.
  */
-class Compilationcontext
+class CompilationContext
 {
+  public $MACRO_PREFIX = '@@';
+  public $MACRO_ALIAS_DELIMITER = ':';
+  public $MACRO_BODY_DELIMITER = ':';
+
   public $ns = array();
   public $alias = array();
-  public $MACRO_PREFIX = '@@';
-  public $ALIAS_DELIMITER = ':';
-  public $BODY_START = ':';
 
-  private $ns_low = array();
-  private $alias_low = array();
-
-  public function registerAlias ($alias, $class)
+  public function registerClass ($alias, $class)
   {
-    $alias_low = strtolower ($alias);
-    if (isset($this->alias_low[$alias_low]))
-      throw new RuntimeException("Macro alias '$alias' conflicts with a XML prefix with the same name.");
-    if (isset($this->alias[$alias]))
-      throw new RuntimeException("Multiple declarations for the same macro alias '$alias' are not allowed.");
-    $this->alias[$alias] = $class;
-    $this->alias_low[$alias_low] = true;
+    $key = strtolower (Str::camel ($alias));
+    if (isset($this->ns[$key]))
+      throw new RuntimeException("Macro class alias '$alias' conflicts with an equivalent XML prefix.");
+    if (isset($this->alias[$key]))
+      throw new RuntimeException("Multiple declarations for the same macro class alias '$alias' are not allowed.");
+    $this->alias[$key] = $class;
   }
 
   public function registerNamespace ($prefix, $namespace)
   {
-    $prefix_low = strtolower ($prefix);
-    if (isset($this->ns_low[$prefix_low]))
-      throw new RuntimeException("XML prefix '$prefix' conflicts with a macro class alias with the same name.");
-    if (isset($this->ns[$prefix]))
+    if (!preg_match ('/^[\w\\\]*$/', $namespace))
+      throw new RuntimeException("xmlns:$prefix=\"$namespace\" declares an invalid PHP namespace.");
+    $key = strtolower (Str::camel ($prefix));
+    if (isset($this->alias['']) && strtolower ($alias = $this->alias['']) == $key)
+      throw new RuntimeException("XML prefix '$prefix' conflicts with the default macro class name '$alias'.");
+    if (isset($this->alias[$key]))
+      throw new RuntimeException("XML prefix '$prefix' conflicts with an equivalent macro class alias.");
+    if (isset($this->ns[$key]))
       throw new RuntimeException("Multiple declarations for the same XML prefix '$prefix' are not allowed.");
-    $this->ns[$prefix] = $namespace;
-    $this->ns_low[$prefix_low] = true;
+    $this->ns[$key] = $namespace;
+  }
+
+  public function getClass ($alias)
+  {
+    $key = $this->getClassAlias ($alias);
+    return $this->alias[$key];
+  }
+
+  public function getClassAlias ($alias)
+  {
+    $key = strtolower (Str::camel ($alias));
+    if (!isset($this->alias[$key])) {
+      $alias = $alias ? "Alias '$alias'" : "The default alias";
+      throw new RuntimeException("$alias is not bound to a class.");
+    }
+    return $key;
+  }
+
+  public function getNamespace ($prefix)
+  {
+    $key = strtolower (Str::camel ($prefix));
+    if (!isset($this->ns[$key]))
+      throw new RuntimeException("XML prefix '$prefix' is not bound to a namespace.");
+    return $this->ns[$key];
   }
 
 }
@@ -48,7 +72,9 @@ class Hyperblade
 {
   public static function register ()
   {
-    $compile = function ($view, Compilationcontext $ctx) use (&$compile) {
+    $compile = function ($view, CompilationContext $ctx) use (&$compile) {
+
+      $prolog = array();
 
       /*
        * Defines a class alias for use with macros.
@@ -60,18 +86,43 @@ class Hyperblade
        */
 
       $view = preg_replace_callback ('/(?<!\w)(\s*)@use\s*\(\s*(\S+)\s*(?:as\s*(\w+)\s*)?\)\s*$/m',
-        function ($match) use ($ctx) {
+        function ($match) use ($ctx, &$prolog) {
           $match[] = ''; // the default namespace.
           list ($all, $space, $class, $alias) = $match;
-          $ctx->registerAlias ($alias, $class);
+          $ctx->registerClass ($alias, $class);
+          if ($alias)
+            $prolog[] = "use $class as $alias;";
           return $space;
         }, $view);
 
-      $keys = array_keys ($ctx->alias);
-      if (count($keys) && !(count($keys) == 1 && isset($ctx->alias[''])))
-        $view = "<?php\n" . implode ('\n', array_map (function ($alias, $namespace) {
-            return $alias ? "use $namespace as $alias;\n" : '';
-          }, $keys, array_values ($ctx->alias))) . '?>' . $view;
+      /*
+       * Namespace declarations bind a XML prefix to a PHP namespace.
+       * They can be an attribute of any tag in the template, but they also may appear in comments (or even strings,
+       * so beware!).
+       *
+       * Syntax:
+       *
+       *   <sometag ... xmlns:prefix="namespace" ...>
+       *
+       * Ex:
+       *
+       *   <div xmlns:form="ns1\ns2\forms">
+       *
+       * `prefix` can be dash-cased.
+       */
+      //
+      $view = preg_replace_callback ('/\bxmlns:([\w\-]+)\s*=\s*(["\'])(.*?)\\2\s*/',
+        function ($match) use ($ctx, &$prolog) {
+          list ($all, $prefix, $quote, $namespace) = $match;
+          $ctx->registerNamespace ($prefix, $namespace);
+          $prolog[] = "use $namespace as $prefix;";
+          return ''; //suppress attribute
+        }, $view);
+
+      // Prepend the namespace declarations to the compiled view.
+
+      if (!empty($prolog))
+        $view = "<?php\n" . implode ("\n", $prolog) . "\n?>" . $view;
 
       /*
        * Simple macros invoke a method and output its result.
@@ -88,16 +139,12 @@ class Hyperblade
        */
 
       $view =
-        preg_replace_callback ('/(?<!\w)(\s*)' . $ctx->MACRO_PREFIX . '((?:([\w\\\\]+)' . $ctx->ALIAS_DELIMITER .
-          ')?(\w+))(?:\s*\((.*?)\))?(?!\s*' . $ctx->BODY_START . ')/s',
+        preg_replace_callback ('/(?<!\w)(\s*)' . $ctx->MACRO_PREFIX . '((?:([\w\\\\]+)' . $ctx->MACRO_ALIAS_DELIMITER .
+          ')?(\w+))(?:\s*\((.*?)\))?(?!\s*' . $ctx->MACRO_BODY_DELIMITER . ')/s',
           function ($match) use ($ctx) {
             array_push ($match, ''); // allow $args to be undefined.
             list ($all, $space, $fullName, $alias, $method, $args) = $match;
-            if (!isset($ctx->alias[$alias])) {
-              $alias = $alias ? "Alias '$alias'" : "The default alias";
-              throw new RuntimeException("$alias is not bound to a class.");
-            }
-            $class = $ctx->alias[$alias];
+            $class = $ctx->getClassAlias ($alias) ?: $ctx->getClass ('');
             return "$space<?php echo $class::$method($args) ?> "; //trailing space is needed for formatting.
           }, $view);
 
@@ -122,7 +169,8 @@ class Hyperblade
        */
 
       $view = preg_replace_callback ('/(?<!\w)(\s*)^([ \t]*)' . $ctx->MACRO_PREFIX . '((?:([\w\\\]+)' .
-        $ctx->ALIAS_DELIMITER . ')?(\w+))(?:\s*\((.*?)\))?\s*' . $ctx->BODY_START . '\s*(.*?)' . $ctx->MACRO_PREFIX .
+        $ctx->MACRO_ALIAS_DELIMITER . ')?(\w+))(?:\s*\((.*?)\))?\s*' . $ctx->MACRO_BODY_DELIMITER . '\s*(.*?)' .
+        $ctx->MACRO_PREFIX .
         'end\3/sm',
         function ($match) use (&$compile, $ctx) {
           list ($all, $space, $indentSpace, $fullName, $alias, $method, $args, $content) = $match;
@@ -136,39 +184,6 @@ class Hyperblade
           $content = trim ($compile ($content));
           return "$space<?php ob_start() ?>$content<?php echo $class::$method('$indentSpace',ob_get_clean()$args) ?>";
         }, $view);
-
-      /*
-       * Namespace declarations bind a XML prefix to a PHP namespace.
-       * They can be an attribute of any tag in the template, but they also may appear in comments (or even strings,
-       * so beware!).
-       *
-       * Syntax:
-       *
-       *   <sometag ... xmlns:prefix="namespace" ...>
-       *
-       * Ex:
-       *
-       *   <div xmlns:form="ns1\ns2\forms">
-       *
-       * `prefix` can be dash-cased.
-       */
-      //
-      $view = preg_replace_callback ('/\bxmlns:([\w\-]+)\s*=\s*(["\'])(.*?)\\2\s*/',
-        function ($match) use ($ctx) {
-          list ($all, $prefix, $quote, $value) = $match;
-          if (!preg_match ('/^[\w\\\]*$/', $value))
-            throw new RuntimeException("xml:$prefix=\"$value\" declares an invalid PHP namespace.");
-          $prefix = Str::camel ($prefix);
-          if (isset($ctx->ns[$prefix]))
-            throw new RuntimeException("Multiple declarations for the same XML prefix '$prefix' are not allowed.");
-          $ctx->registerNamespace ($prefix, $value);
-          return ''; //suppress attribute
-        }, $view);
-
-      if (!empty($ctx->ns))
-        $view = "<?php\n" . implode ('\n', array_map (function ($prefix, $namespace) {
-            return "use $namespace as $prefix;\n";
-          }, array_keys ($ctx->ns), array_values ($ctx->ns))) . '?>' . $view;
 
       /*
        * Hyperblade mixins transform attributes into something else.
@@ -244,8 +259,6 @@ class Hyperblade
       /smx',
         function ($match) use (&$compile, $ctx) {
           list ($all, $space, $prefix, $tag, $attrs, $content) = $match;
-          if (!isset($ctx->ns[$prefix]))
-            throw new RuntimeException("XML prefix '$prefix' is not bound to a namespace.");
           $class = Str::camel ($prefix) . '\\' . ucfirst (Str::camel ($tag));
           $attrs = preg_replace ('/(?<=["\'])\s+(?=\w)/', ',', $attrs);
           $attrs = preg_replace ('/([\w\-]+)\s*=\s*(["\'])(.*?)\\2/', '\'$1\'=>$2$3$2', $attrs);
@@ -257,7 +270,7 @@ class Hyperblade
     };
 
     Blade::extend (function ($view) use (&$compile) {
-      return $compile ($view, new Compilationcontext);
+      return $compile ($view, new CompilationContext);
     });
 
   }

@@ -8,11 +8,26 @@ use RuntimeException, Illuminate\Support\Str;
  */
 class CompilationContext
 {
+  /**
+   * A marker that signals the beginning of a macro tag.
+   * @var string
+   */
   public $MACRO_PREFIX = '@@';
+  /**
+   * The separator between a prefix and a tag name.
+   * @var string
+   */
   public $MACRO_ALIAS_DELIMITER = ':';
-  public $MACRO_BODY_DELIMITER = ':';
+  /**
+   * The marker for the end of a macro's content.
+   * You can use two %s placeholders for the prefix and tag, respectively.
+   * @var string
+   */
+  public $MACRO_END = '@@%send%s';
 
-  public $ns = array();
+  public $ns = array(
+    'html' => 'contentwave\hyperblade'
+  );
 
   /**
    * Registers a namespace for a given alias/prefix.

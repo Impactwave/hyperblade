@@ -75,7 +75,7 @@ class Hyperblade
         $view = "<?php\n" . implode ("\n", $prolog) . "\n?>" . $view;
 
       /*
-       * Simple macros invoke a method and output its result.
+       * Simple macros invoke a static method on a class and output its result.
        *
        *   Syntax: @@[alias:]method [(args)]
        *
@@ -88,19 +88,35 @@ class Hyperblade
        * If an alias is not specified, the default nameless alias is assumed.
        */
 
-      $view =
-        preg_replace_callback ('/(?<!\w)(\s*)' . $ctx->MACRO_PREFIX . '((?:([\w\-]+)' . $ctx->MACRO_ALIAS_DELIMITER .
-          ')?(\w+))(?:\s*\((.*?)\))?(?!\s*' . $ctx->MACRO_BODY_DELIMITER . ')/s',
-          function ($match) use ($ctx) {
-            array_push ($match, ''); // allow $args to be undefined.
-            list ($all, $space, $fullName, $alias, $method, $args) = $match;
-            $class = $ctx->getNormalizedPrefix ($alias);
-            return "$space<?php echo $class::$method($args) ?> "; //trailing space is needed for formatting.
-          }, $view);
+      $allends = sprintf ($ctx->MACRO_END, '(?:[\w\-]+:)?', '(?:[\w\-]+)');
+      $end = sprintf ($ctx->MACRO_END, '\2', '\3');
+
+      $view = preg_replace_callback ('/
+        (?<! \w)(\s*)                                         # capture leading white space
+        (?! ' . $allends . ')                                 # do not match end tags
+        ' . $ctx->MACRO_PREFIX . '                            # macro begins
+        ([\w\-]+' . $ctx->MACRO_ALIAS_DELIMITER . ')?         # capture optional alias
+        ([\w\-]+)                                             # capture macro method
+        (?! \w|-|' . $ctx->MACRO_ALIAS_DELIMITER . ')         # prevent invalid matches forced by the last negative lookahead below
+        (?:
+          \s*\((.*?)\)                                        # capture optional arguments block
+        )?
+        (?: (?! ' . $end . ').)*$                             # do not match if macro has content
+        /sx',
+        function ($match) use ($ctx, $view, $end) {
+          echo "SIMPLE";
+          dd ($match, $end);
+          array_push ($match, ''); // allow $args to be undefined.
+          list ($all, $space, $alias, $method, $args) = $match;
+          $alias = substr ($alias, -strlen ($ctx->MACRO_ALIAS_DELIMITER));
+          $method = Str::camel ($method);
+          $class = $ctx->getNormalizedPrefix ($alias);
+          return "$space<?php echo $class::$method($args) ?> "; //trailing space is needed for formatting.
+        }, $view);
 
       /*
-       * Block macros invoke a method and output its result, but they also support a block of content and source code
-       * indentation.
+       * Block macros invoke a static method on a class and output its result, and they also support a block of content
+       * and source code indentation.
        *
        * Syntax:
        *
@@ -118,17 +134,34 @@ class Hyperblade
        * indentSpace is a white space string corresponding to the indentation level of this block.
        */
 
-      $view = preg_replace_callback ('/(?<!\w)(\s*)^([ \t]*)' . $ctx->MACRO_PREFIX . '((?:([\w\-]+)' .
-        $ctx->MACRO_ALIAS_DELIMITER . ')?(\w+))(?:\s*\((.*?)\))?\s*' . $ctx->MACRO_BODY_DELIMITER . '\s*(.*?)' .
-        $ctx->MACRO_PREFIX .
-        'end\3/sm',
+      $end = sprintf ($ctx->MACRO_END, '\3', '\4');
+
+      $view = preg_replace_callback ('/
+        (?<! \w)(\s*)                                         # capture white space before the line where the macro lies
+        ^([ \t]*)                                             # capture indentation
+        ' . $ctx->MACRO_PREFIX . '                            # macro begins
+        ([\w\-]+' . $ctx->MACRO_ALIAS_DELIMITER . ')?         # capture optional alias
+        ([\w\-]+)                                             # capture macro method
+        (?:
+          \s*\((.*?)\)                                        # capture optional arguments block
+        )?
+        \s*                                                   # supress white space
+        (                                                     # capture macro content
+          (?:                                                 # loop begin
+            (?R)                                              # either recurse
+          |                                                   # or
+            (?! ' . $end . ').                                # consume one char until the closing tag is reached
+          )*                                                  # repeat
+        )' .
+        $end . '                                              # match the macro end tag
+        /sx',
         function ($match) use (&$compile, $ctx) {
-          list ($all, $space, $indentSpace, $fullName, $alias, $method, $args, $content) = $match;
-          if (!isset($ctx->alias[$alias])) {
-            $alias = $alias ? "Alias '$alias'" : "The default alias";
-            throw new RuntimeException("$alias is not bound to a class.");
-          }
-          $class = $ctx->alias[$alias];
+          echo "BLOCK";
+          dd ($match);
+          list ($all, $space, $indentSpace, $alias, $method, $args, $content) = $match;
+          $alias = substr ($alias, -strlen ($ctx->MACRO_ALIAS_DELIMITER));
+          $method = Str::camel ($method);
+          $class = $ctx->getNormalizedPrefix ($alias);
           if ($args != '')
             $args = ",$args";
           $content = trim ($compile ($content));
@@ -195,7 +228,7 @@ class Hyperblade
        */
       $view = preg_replace_callback ('/
         (^\s*)?                 # capture white space from the beginning of the line
-        <([\w\-]+):([\w\-]+)    # match and capture <prefix:tag
+        < ([\w\-]+) : ([\w\-]+) # match and capture <prefix:tag
         \s*(.*?)                # capture attributes
         >\s*                    # match > and remaining white space
         (                       # capture tag content

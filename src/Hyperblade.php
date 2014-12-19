@@ -94,7 +94,7 @@ class Hyperblade
           function ($match) use ($ctx) {
             array_push ($match, ''); // allow $args to be undefined.
             list ($all, $space, $fullName, $alias, $method, $args) = $match;
-            $class = $ctx->getNormalizedPrefix ($alias) ?: $ctx->getNamespace ('');
+            $class = $ctx->getNormalizedPrefix ($alias);
             return "$space<?php echo $class::$method($args) ?> "; //trailing space is needed for formatting.
           }, $view);
 

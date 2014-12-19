@@ -83,8 +83,11 @@ class CompilationContext
    */
   public function getNormalizedPrefix ($alias)
   {
-    $alias = $alias ? Str::camel ($alias) : $this->getNamespace ('');
-    return ctype_upper ($alias[0]) ? ucfirst ($alias) : $alias;
+    $ns = $this->getNamespace ($alias);
+    $e = explode ('\\', $ns);
+    $last = array_pop ($e);
+    $camel = Str::camel ($alias);
+    return ctype_upper ($last[0]) ? ucfirst ($camel) : $camel;
   }
 
 }

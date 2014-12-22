@@ -77,40 +77,48 @@ class Hyperblade
       /*
        * Simple macros invoke a static method on a class and output its result.
        *
-       *   Syntax: @@[alias:]method [(args)]
+       *   Syntax: @@[classAlias.]method [(args)]
        *
        * Generated code (simplified):
        *
-       *   class::method (args)
+       *   classAlias::method (args)
        *
-       * Arguments and parenthesis are optional; ex: @@a:b instead of @@a:b()
-       * `alias` must have been previously bound to a class using @use.
+       * Arguments and parenthesis are optional; ex: @@a-b instead of @@a-b()
+       * `classAlias` must have been previously bound to a class using @use.
        * If an alias is not specified, the default nameless alias is assumed.
        */
 
-      $allends = sprintf ($ctx->MACRO_END, '(?:[\w\-]+:)?', '(?:[\w\-]+)');
-      $end = sprintf ($ctx->MACRO_END, '\2', '\3');
+      $allends = sprintf ($ctx->MACRO_END, '(?:[\w\-]+' . $ctx->MACRO_ALIAS_DELIMITER . ')?', '(?:[\w\-]+)');
 
       $view = preg_replace_callback ('/
         (?<! \w)(\s*)                                         # capture leading white space
-        (?! ' . $allends . ')                                 # do not match end tags
         ' . $ctx->MACRO_PREFIX . '                            # macro begins
+        (?! ' . $allends . ')                                 # do not match end tags
         ([\w\-]+' . $ctx->MACRO_ALIAS_DELIMITER . ')?         # capture optional alias
         ([\w\-]+)                                             # capture macro method
-        (?! \w|-|' . $ctx->MACRO_ALIAS_DELIMITER . ')         # prevent invalid matches forced by the last negative lookahead below
+        (?= \( | \s )                                         # force capture full word
         (?:
           \s*\((.*?)\)                                        # capture optional arguments block
         )?
-        (?: (?! ' . $end . ').)*$                             # do not match if macro has content
+        (?! \s*' . $ctx->MACRO_BEGIN . ')                     # do not match macros with a content block
+        (?! \s*\( )                                           # do not match macros with a content block
         /sx',
-        function ($match) use ($ctx, $view, $end) {
-          echo "SIMPLE";
-          dd ($match, $end);
+        function ($match) use ($ctx, $view, $allends) {
+          //echo "SIMPLE";
+          //dd ($match, $allends);
           array_push ($match, ''); // allow $args to be undefined.
           list ($all, $space, $alias, $method, $args) = $match;
-          $alias = substr ($alias, -strlen ($ctx->MACRO_ALIAS_DELIMITER));
+          $alias = substr ($alias, 0, -strlen ($ctx->MACRO_ALIAS_DELIMITER));
           $method = Str::camel ($method);
           $class = $ctx->getNormalizedPrefix ($alias);
+
+          $c = substr_count ($args, ',');
+          $realClass = $ctx->getNamespace ($alias);
+          $info = new \ReflectionMethod($realClass, $method);
+          $r = $info->getNumberOfRequiredParameters ();
+          if ($c < $r)
+            throw new RuntimeException ("Error on macro call: $all\n\nThe corresponding method $realClass::$method must have at least $r arguments, this call generates $c arguments.\nPlease check the method/call signatures.");
+
           return "$space<?php echo $class::$method($args) ?> "; //trailing space is needed for formatting.
         }, $view);
 
@@ -120,13 +128,13 @@ class Hyperblade
        *
        * Syntax:
        *
-       *   @@[alias:]method [(args)]:
+       *   @@[classAlias.]method [(args)]:
        *     html markup
-       *   @@end[alias:]method
+       *   @@end[alias.]method
        *
        * Generated code (simplified):
        *
-       *   class::method (indentSpace,html,args...)
+       *   classAlias::method (indentSpace,html,args...)
        *
        * Arguments and parenthesis are optional; ex: @@a:b instead of @@a:b()
        * `alias` must have been previously bound to a class using @use.
@@ -134,18 +142,19 @@ class Hyperblade
        * indentSpace is a white space string corresponding to the indentation level of this block.
        */
 
-      $end = sprintf ($ctx->MACRO_END, '\3', '\4');
+      $end = $ctx->MACRO_PREFIX . sprintf ($ctx->MACRO_END, '\3', '\4');
 
       $view = preg_replace_callback ('/
         (?<! \w)(\s*)                                         # capture white space before the line where the macro lies
-        ^([ \t]*)                                             # capture indentation
+        ^([\ \t]*)                                            # capture indentation
         ' . $ctx->MACRO_PREFIX . '                            # macro begins
         ([\w\-]+' . $ctx->MACRO_ALIAS_DELIMITER . ')?         # capture optional alias
         ([\w\-]+)                                             # capture macro method
         (?:
           \s*\((.*?)\)                                        # capture optional arguments block
         )?
-        \s*                                                   # supress white space
+        \s* ' . $ctx->MACRO_BEGIN . '                         # only match macros with a content block
+        \s*                                                   # supress leading white space on the content
         (                                                     # capture macro content
           (?:                                                 # loop begin
             (?R)                                              # either recurse
@@ -154,17 +163,25 @@ class Hyperblade
           )*                                                  # repeat
         )' .
         $end . '                                              # match the macro end tag
-        /sx',
+        /sxm',
         function ($match) use (&$compile, $ctx) {
-          echo "BLOCK";
-          dd ($match);
+          //echo "BLOCK";
+          //dd ($match);
           list ($all, $space, $indentSpace, $alias, $method, $args, $content) = $match;
-          $alias = substr ($alias, -strlen ($ctx->MACRO_ALIAS_DELIMITER));
+          $alias = substr ($alias, 0, -strlen ($ctx->MACRO_ALIAS_DELIMITER));
           $method = Str::camel ($method);
           $class = $ctx->getNormalizedPrefix ($alias);
           if ($args != '')
             $args = ",$args";
-          $content = trim ($compile ($content));
+          $content = trim ($compile ($content, $ctx));
+
+          $c = 2 + substr_count ($args, ',');
+          $realClass = $ctx->getNamespace ($alias);
+          $info = new \ReflectionMethod($realClass, $method);
+          $r = $info->getNumberOfRequiredParameters ();
+          if ($c < $r)
+            throw new RuntimeException ("Error on macro call:\n$all\n\nThe corresponding method $realClass::$method must have at least $r arguments, this call generates $c arguments.\nPlease check the method/call signatures.");
+
           return "$space<?php ob_start() ?>$content<?php echo $class::$method('$indentSpace',ob_get_clean()$args) ?>";
         }, $view);
 

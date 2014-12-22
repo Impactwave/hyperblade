@@ -14,16 +14,21 @@ class CompilationContext
    */
   public $MACRO_PREFIX = '@@';
   /**
-   * The separator between a prefix and a tag name.
+   * The separator between a prefix and a tag name. Ex: @@form-field
    * @var string
    */
-  public $MACRO_ALIAS_DELIMITER = ':';
+  public $MACRO_ALIAS_DELIMITER = '.';
   /**
-   * The marker for the end of a macro's content.
-   * You can use two %s placeholders for the prefix and tag, respectively.
+   * The marker for the beginning of a macro's content block.
    * @var string
    */
-  public $MACRO_END = '@@%send%s';
+  public $MACRO_BEGIN = ':';
+  /**
+   * The marker for the end of a macro's content block.
+   * You can use two %s placeholders for the classAlias (including the trailing delimiter) and tag, respectively.
+   * @var string
+   */
+  public $MACRO_END = '%send%s';
 
   public $ns = array(
     'html' => 'contentwave\hyperblade'

@@ -101,6 +101,21 @@ class CompilationContext
   }
 
   /**
+   * Gets the PHP fully aqualified class name for the given xml `prefix:name` tag or attribute.
+   * @param string $prefix
+   * @param string $name
+   * @return string
+   */
+  public function getFQClass ($prefix, $name)
+  {
+    $namespace = $this->getNamespace ($prefix);
+    $class = ucfirst (Str::camel ($name));
+    if (!class_exists ("$namespace\\$class"))
+      throw new RuntimeException("No class was found for <$prefix:$name> on the '$namespace' namespace.");
+    return "$namespace\\$class";
+  }
+
+  /**
    * Gets the prefix that sould be used for macro calls.
    * @param string alias
    * @return string

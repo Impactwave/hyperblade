@@ -233,11 +233,12 @@ class Hyperblade
        *
        *   will be compiled to (simplified example):
        *
-       *   (new namespace\class(array attributes, string html, string indentSpace))->render();
+       *   (new namespace\class(array attributes, string html, array scopeVars, string indentSpace))->render();
        *
        * Creates a new instance of a namespace\class where:
        *   - `namespace` is a previously registered namespace for the given `prefix` (via xmlns or @use declarations).
        *   - `class` is a class name written in dash-case.
+       *   - `scopeVars` are all the variables accesible in the calling PHP scope.
        *
        * If you want automatic support for converting attributes to class properties and other advanced functionality,
        * your class should subclass `contentwave\hyperblade\Component`.
@@ -260,10 +261,16 @@ class Hyperblade
         function ($match) use (&$compile, $ctx) {
           list ($all, $space, $prefix, $tag, $attrs, $content) = $match;
           $class = $ctx->getClass ($prefix, $tag);
+
+          $realClass = $ctx->getFQClass ($prefix, $tag);
+          $info = new \ReflectionMethod($realClass, '__construct');
+          if ($info->getNumberOfParameters () != 4)
+            throw new RuntimeException ("Error on macro call:\n$all\n\nThe corresponding class $realClass's constructor must have at least 4 arguments.");
+
           $attrs = preg_replace ('/(?<=["\'])\s+(?=\w)/', ',', $attrs);
           $attrs = preg_replace ('/([\w\-]+)\s*=\s*(["\'])(.*?)\\2/', '\'$1\'=>$2$3$2', $attrs);
           $content = $compile ($content, $ctx);
-          return "$space<?php ob_start() ?>$content<?php echo (new $class(array($attrs),ob_get_clean(),'$space'))->render(); ?>";
+          return "$space<?php ob_start() ?>$content<?php echo (new $class(array($attrs),ob_get_clean(),get_defined_vars(),'$space'))->render(); ?>";
         }, $view);
 
       return $view;

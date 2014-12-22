@@ -108,17 +108,17 @@ class Hyperblade
           //dd ($match, $allends);
           array_push ($match, ''); // allow $args to be undefined.
           list ($all, $space, $alias, $method, $args) = $match;
-          $alias = substr ($alias, 0, -strlen ($ctx->MACRO_ALIAS_DELIMITER));
+          if ($alias)
+            $alias = substr ($alias, 0, -strlen ($ctx->MACRO_ALIAS_DELIMITER));
           $method = Str::camel ($method);
           $class = $ctx->getNormalizedPrefix ($alias);
-
           $c = substr_count ($args, ',');
           $realClass = $ctx->getNamespace ($alias);
           $info = new \ReflectionMethod($realClass, $method);
           $r = $info->getNumberOfRequiredParameters ();
           if ($c < $r)
             throw new RuntimeException ("Error on macro call: $all\n\nThe corresponding method $realClass::$method must have at least $r arguments, this call generates $c arguments.\nPlease check the method/call signatures.");
-
+          if (!$class) $class = $ctx->getNamespace ('');
           return "$space<?php echo $class::$method($args) ?> "; //trailing space is needed for formatting.
         }, $view);
 

@@ -10,22 +10,26 @@ class CompilationContext
 {
   /**
    * A marker that signals the beginning of a macro tag.
+   * This value must be escaped for RegExp.
    * @var string
    */
   public $MACRO_PREFIX = '@@';
   /**
    * The separator between a prefix and a tag name. Ex: @@form-field
+   * This value must be escaped for RegExp.
    * @var string
    */
-  public $MACRO_ALIAS_DELIMITER = '.';
+  public $MACRO_ALIAS_DELIMITER = '\\.';
   /**
    * The marker for the beginning of a macro's content block.
+   * This value must be escaped for RegExp.
    * @var string
    */
   public $MACRO_BEGIN = ':';
   /**
    * The marker for the end of a macro's content block.
    * You can use two %s placeholders for the classAlias (including the trailing delimiter) and tag, respectively.
+   * This value must be escaped for RegExp.
    * @var string
    */
   public $MACRO_END = '%send%s';

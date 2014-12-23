@@ -33,11 +33,24 @@ class CompilationContext
    * @var string
    */
   public $MACRO_END = '%send%s';
-
-  public $ns = array(
-    'html' => 'contentwave\hyperblade'
+  /**
+   * A map of prefixes to namespaces or of alias to classes.
+   * @var array
+   */
+  public $ns = array();
+  /**
+   * Compilation nesting level.
+   * @var int
+   */
+  public $nestingLevel = 0;
+  /**
+   * A list of PHP statements to be prepended to the view.
+   * This is only output on the first nesting level.
+   * @var array
+   */
+  public $prolog = array(
+    'use contentwave\hyperblade as _h;'
   );
-
   /**
    * Registers a namespace for a given alias/prefix.
    * @param string $alias

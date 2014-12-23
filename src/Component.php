@@ -1,8 +1,6 @@
 <?php
 namespace contentwave\hyperblade;
 
-use RuntimeException;
-
 /**
  * Base class for components.
  * Using this class is not mandatory. You can create your classes for handling components without extending this class.
@@ -10,9 +8,16 @@ use RuntimeException;
  */
 class Component
 {
-  protected $attrs;
-  protected $html;  //content
-  protected $space; //indent
+  /**
+   * The component's attribute names and values.
+   * @var ArrayAsObject
+   */
+  protected $attr;
+  /**
+   * The component's content block.
+   * @var string
+   */
+  protected $content;
   /**
    * The containing view's factory instance.
    * @var \Illuminate\Contracts\View\Factory
@@ -25,16 +30,24 @@ class Component
   protected $viewPath;
   /**
    * The containing view's data scope.
-   * @var array
+   * @var ArrayAsObject
    */
   protected $viewScope;
   /**
    * The view data scope for the component instance.
-   * When rendering the component's view, this property's data will be merged with `viewScope` and added a
-   * `_content property` (containing the component's content block) and published to the component's view.
-   * @var array
+   *
+   * When rendering the component's view, this property's data will be merged with `viewScope`, added some utility
+   * properties and then published to the component's view.
+   *
+   * The added properties are:
+   * <table>
+   *   <tr><td> content <td> contains the component's content block
+   *   <tr><td> attr    <td> array containing the component's attributes
+   * </table>
+   *
+   * @var ArrayAsObject
    */
-  protected $scope = array();
+  protected $scope;
 
   /**
    * Override this to set the view template for your custom component.
@@ -43,40 +56,50 @@ class Component
   protected $templateName;
 
   /**
-   * Adds the given space to the beginning of each line in the input string.
+   * Adds the given space to the beginning of each line in the input string, except for the first line.
    * @param string $str
    * @param string $space
    * @return string
    */
   public static function indent ($str, $space)
   {
-    return preg_replace ('/^/m', $space, $str);
+    return substr (preg_replace ('/^/m', $space, $str), strlen ($space));
   }
 
-  public static function argToStr ($v)
+  /**
+   * Removes the given space from the beginning of each line in the input string.
+   * @param string $str
+   * @param string $space
+   * @return string
+   */
+  public static function unindent ($str, $space)
   {
-    if (is_string ($v)) return "'" . strreplace ("'", "\\'", $v) . "'";
-    if (is_numeric ($v)) return $v;
-    if (is_bool ($v)) return $v ? 'true' : 'false';
-    if (is_null ($v)) return 'null';
-    throw new RuntimeException ("Component argument type is not supported: " . gettype ($v));
+    return preg_replace ("/^$space/m", '', $str);
   }
 
   public function debugScope ()
   {
-    $this->scope['app'] = 'Application instance not shown...';
-    $this->scope['__env'] = 'Factory instance not shown...';
-    dd ($this->scope);
+    $this->scope->app = 'Application instance not shown...';
+    $this->scope->__env = 'Factory instance not shown...';
+    dd ((object)$this->scope->toArray());
   }
 
-  public function __construct (array $attrs, $html, array $env, $space)
+  public function debugViewScope ()
   {
-    $this->attrs = $attrs;
-    $this->html = $html;
-    $this->space = $space;
+    $this->viewScope->app = 'Application instance not shown...';
+    $this->viewScope->__env = 'Factory instance not shown...';
+    //$this->viewScope->__data = '__data instance not shown...';
+    dd ((object)$this->viewScope->toArray());
+  }
+
+  public function __construct (array $attrs, $content, array $env)
+  {
+    $this->scope = new ArrayAsObject;
+    $this->attr = new ArrayAsObject($attrs);
+    $this->content = "  $content";
     $this->viewFactory = $env['__env'];
     $this->viewPath = $env['__path'];
-    $this->viewScope = $env['__data'];
+    $this->viewScope = new ArrayAsObject($env['__data']);
   }
 
   public function render ()
@@ -84,13 +107,14 @@ class Component
     if (!$this->templateName)
       throw new RuntimeException("No template is set for component " . get_called_class ());
     $data = $this->scope;
-    $data ['_content'] = $this->html;
+    $data->content = $this->content;
+    $data->attr = $this->attr;
     $result = $this->viewFactory->make (
       $this->templateName,
       $data,
-      array_except ($this->viewScope, array('__data', '__path'))
+      array_except ($this->viewScope->toArray(), array('__data', '__path'))
     )->render ();
-    return $this->space . $result;
+    return $result;
   }
 
 }

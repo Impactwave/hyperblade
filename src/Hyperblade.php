@@ -4,6 +4,17 @@ namespace contentwave\hyperblade;
 use Blade, RuntimeException, Illuminate\Support\Str;
 
 /**
+ * Adds the given space to the beginning of each line in the input string, except for the first line.
+ * Then it outputs the resulting string.
+ * @param string $str
+ * @param string $space
+ */
+function out ($str, $space)
+{
+  echo substr (preg_replace ('/^/m', $space, $str), strlen ($space));
+}
+
+/**
  * An extension to the Blade templating engine.
  */
 class Hyperblade
@@ -12,7 +23,7 @@ class Hyperblade
   {
     $compile = function ($view, CompilationContext $ctx) use (&$compile) {
 
-      $prolog = array();
+      ++$ctx->nestingLevel;
 
       /*
        * @use directive.
@@ -29,13 +40,13 @@ class Hyperblade
        */
 
       $view = preg_replace_callback ('/(?<!\w)(\s*)@use\s*\(\s*(\S+)\s*(?:as\s*([\w\-]+)\s*)?\)\s*$/m',
-        function ($match) use ($ctx, &$prolog) {
+        function ($match) use ($ctx) {
           $match[] = ''; // the default namespace.
           list ($all, $space, $FQN, $alias) = $match;
           $ctx->registerNamespace ($alias, $FQN);
           if ($alias) {
             $alias = $ctx->getNormalizedPrefix ($alias);
-            $prolog[] = "use $FQN as $alias;";
+            $ctx->prolog[] = "use $FQN as $alias;";
           }
           return $space;
         }, $view);
@@ -61,18 +72,18 @@ class Hyperblade
        */
       //
       $view = preg_replace_callback ('/\bxmlns:([\w\-]+)\s*=\s*(["\'])(.*?)\\2\s*/',
-        function ($match) use ($ctx, &$prolog) {
+        function ($match) use ($ctx) {
           list ($all, $prefix, $quote, $namespace) = $match;
           $ctx->registerNamespace ($prefix, $namespace);
           $prefix = Str::camel ($prefix);
-          $prolog[] = "use $namespace as $prefix;";
+          $ctx->prolog[] = "use $namespace as $prefix;";
           return ''; //suppress attribute
         }, $view);
 
       // Prepend the generated namespace declarations to the compiled view.
 
-      if (!empty($prolog))
-        $view = "<?php\n" . implode ("\n", $prolog) . "\n?>" . $view;
+      if ($ctx->nestingLevel == 1)
+        $view = "<?php\n" . implode ("\n", $ctx->prolog) . "\n?>" . $view;
 
       /*
        * Simple macros invoke a static method on a class and output its result.
@@ -112,12 +123,14 @@ class Hyperblade
             $alias = substr ($alias, 0, -strlen ($ctx->MACRO_ALIAS_DELIMITER));
           $method = Str::camel ($method);
           $class = $ctx->getNormalizedPrefix ($alias);
+
           $c = substr_count ($args, ',');
           $realClass = $ctx->getNamespace ($alias);
           $info = new \ReflectionMethod($realClass, $method);
           $r = $info->getNumberOfRequiredParameters ();
           if ($c < $r)
             throw new RuntimeException ("Error on macro call: $all\n\nThe corresponding method $realClass::$method must have at least $r arguments, this call generates $c arguments.\nPlease check the method/call signatures.");
+
           if (!$class) $class = $ctx->getNamespace ('');
           return "$space<?php echo $class::$method($args) ?> "; //trailing space is needed for formatting.
         }, $view);
@@ -264,14 +277,16 @@ class Hyperblade
 
           $realClass = $ctx->getFQClass ($prefix, $tag);
           $info = new \ReflectionMethod($realClass, '__construct');
-          if ($info->getNumberOfParameters () != 4)
-            throw new RuntimeException ("Error on macro call:\n$all\n\nThe corresponding class $realClass's constructor must have at least 4 arguments.");
+          if ($info->getNumberOfParameters () != 3)
+            throw new RuntimeException ("Component class $realClass's constructor must have 3 arguments.");
 
           $attrs = preg_replace ('/(?<=["\'])\s+(?=\w)/', ',', $attrs);
           $attrs = preg_replace ('/([\w\-]+)\s*=\s*(["\'])(.*?)\\2/', '\'$1\'=>$2$3$2', $attrs);
           $content = $compile ($content, $ctx);
-          return "$space<?php ob_start() ?>$content<?php echo (new $class(array($attrs),ob_get_clean(),get_defined_vars(),'$space'))->render(); ?>";
+          return "$space<?php ob_start() ?>$content<?php _h\\out((new $class(array($attrs),ob_get_clean(),get_defined_vars()))->render(),'$space'); ?>";
         }, $view);
+
+      --$ctx->nestingLevel;
 
       return $view;
     };

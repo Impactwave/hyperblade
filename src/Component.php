@@ -1,6 +1,8 @@
 <?php
 namespace contentwave\hyperblade;
 
+use RuntimeException;
+
 /**
  * Base class for components.
  * Using this class is not mandatory. You can create your classes for handling components without extending this class.
@@ -10,7 +12,7 @@ class Component
 {
   /**
    * The component's attribute names and values.
-   * @var ArrayAsObject
+   * @var PropertyList
    */
   protected $attr;
   /**
@@ -30,7 +32,7 @@ class Component
   protected $viewPath;
   /**
    * The containing view's data scope.
-   * @var ArrayAsObject
+   * @var PropertyList
    */
   protected $viewScope;
   /**
@@ -45,7 +47,7 @@ class Component
    *   <tr><td> attr    <td> array containing the component's attributes
    * </table>
    *
-   * @var ArrayAsObject
+   * @var PropertyList
    */
   protected $scope;
 
@@ -81,38 +83,46 @@ class Component
   {
     $this->scope->app = 'Application instance not shown...';
     $this->scope->__env = 'Factory instance not shown...';
-    dd ((object)$this->scope->toArray());
+    dd ((object)$this->scope->toArray ());
   }
 
   public function debugViewScope ()
   {
     $this->viewScope->app = 'Application instance not shown...';
     $this->viewScope->__env = 'Factory instance not shown...';
-    //$this->viewScope->__data = '__data instance not shown...';
-    dd ((object)$this->viewScope->toArray());
+    dd ((object)$this->viewScope->toArray ());
   }
 
   public function __construct (array $attrs, $content, array $env)
   {
-    $this->scope = new ArrayAsObject;
-    $this->attr = new ArrayAsObject($attrs);
-    $this->content = "  $content";
+    $this->scope = new PropertyList;
+    $this->attr = new PropertyList($attrs);
+    $this->content = $content;
     $this->viewFactory = $env['__env'];
     $this->viewPath = $env['__path'];
-    $this->viewScope = new ArrayAsObject($env['__data']);
+    $this->viewScope = new PropertyList($env['__data']);
   }
 
-  public function render ()
+  public function run ()
+  {
+    $this->setViewModel ();
+    return $this->render ();
+  }
+
+  protected function setViewModel ()
+  {
+    $this->scope->content = $this->content;
+    $this->scope->attr = $this->attr;
+  }
+
+  protected function render ()
   {
     if (!$this->templateName)
       throw new RuntimeException("No template is set for component " . get_called_class ());
-    $data = $this->scope;
-    $data->content = $this->content;
-    $data->attr = $this->attr;
     $result = $this->viewFactory->make (
       $this->templateName,
-      $data,
-      array_except ($this->viewScope->toArray(), array('__data', '__path'))
+      $this->scope,
+      array_except ($this->viewScope->toArray (), array('__data', '__path'))
     )->render ();
     return $result;
   }

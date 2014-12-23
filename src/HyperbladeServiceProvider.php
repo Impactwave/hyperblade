@@ -19,7 +19,7 @@ class HyperbladeServiceProvider extends ServiceProvider
    */
   public function boot ()
   {
-    Hyperblade::register ();
+    Hyperblade::registerAsBladeExtension ();
   }
 
   /**

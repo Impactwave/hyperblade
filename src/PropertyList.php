@@ -7,8 +7,9 @@ use Illuminate\Contracts\Support\Arrayable;
 /**
  * Allow access to array data as object properties.
  * Unset properties will return null.
+ * Note: the original array is not affected by mutations on instances of this class.
  */
-class ArrayAsObject implements Arrayable, Countable
+class PropertyList implements Arrayable, Countable
 {
 
   /**
@@ -47,7 +48,6 @@ class ArrayAsObject implements Arrayable, Countable
   {
     return json_encode ($this->items);
   }
-
 
   public function toArray ()
   {

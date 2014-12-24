@@ -59,5 +59,9 @@ class PropertyList implements Arrayable, Countable
     return count ($this->items);
   }
 
+  public function extend ($data)
+  {
+    $this->items = array_merge ($this->items, $data instanceof Arrayable ? $data->toArray () : $data);
+  }
 
 }

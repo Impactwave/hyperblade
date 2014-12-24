@@ -14,7 +14,7 @@ class Component
    * The component's attribute names and values.
    * @var PropertyList
    */
-  protected $attr;
+  public $attr;
   /**
    * The component's content block.
    * @var string
@@ -50,7 +50,6 @@ class Component
    * @var PropertyList
    */
   protected $scope;
-
   /**
    * Override this to set the view template for your custom component.
    * @var string
@@ -90,17 +89,33 @@ class Component
   {
     $this->viewScope->app = 'Application instance not shown...';
     $this->viewScope->__env = 'Factory instance not shown...';
+    $this->viewScope->__data = '__data instance not shown...';
     dd ((object)$this->viewScope->toArray ());
   }
 
-  public function __construct (array $attrs, $content, array $env)
+  /**
+   * @param array $attrs The component tag's attributes.
+   * @param string $content The component tag's content.
+   * @param array $scope All variables present in the host view's scope.
+   */
+  public function __construct (array $attrs, $content, array $scope)
   {
     $this->scope = new PropertyList;
     $this->attr = new PropertyList($attrs);
     $this->content = $content;
-    $this->viewFactory = $env['__env'];
-    $this->viewPath = $env['__path'];
-    $this->viewScope = new PropertyList($env['__data']);
+    $this->viewFactory = $scope['__env'];
+    $this->viewPath = $scope['__path'];
+    $this->viewScope = new PropertyList($scope);
+  }
+
+  public function config ($data)
+  {
+    $this->scope->extend ($data);
+  }
+
+  public function getContent ()
+  {
+    return $this->content;
   }
 
   public function run ()
@@ -111,8 +126,7 @@ class Component
 
   protected function setViewModel ()
   {
-    $this->scope->content = $this->content;
-    $this->scope->attr = $this->attr;
+    $this->scope->my = $this;
   }
 
   protected function render ()

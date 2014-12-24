@@ -44,17 +44,6 @@ class CompilationContext
    */
   public $nestingLevel = 0;
   /**
-   * Each view template can be split into many compilable blocks if it contains embedded PHP source code blocks.
-   * This property tracks the ordinal index of current block being compiled.
-   * @var int
-   */
-  public $blockIndex = 0;
-  /**
-   * The source template being compiled.
-   * @var string
-   */
-  public $templatePath;
-  /**
    * A list of PHP statements to be prepended to the view.
    * This is only output on the first nesting level.
    * @var array
@@ -62,66 +51,18 @@ class CompilationContext
   public $prolog = array(
     'use contentwave\hyperblade as _h;'
   );
-  /**
-   * Sometimes Blade may try to compile the same template multiple times, and if it
-   * repeats the same template twice in sequence it may cause errors because a context
-   * will be reused when it should not.
-   * @var array of string.
-   */
-  private $cachedBlocks = array();
-  /**
-   * List that corresponds to $cachedBlocks.
-   * @var array of string.
-   */
-  private $cachedCompiledBlocks = array();
-
 
   /**
-   * @param string $templatePath
-   */
-  public function __construct ($templatePath)
-  {
-    $this->templatePath = $templatePath;
-  }
-
-  public function cachedIndex ($source) {
-    echo "\n\nSEARCH\n\n$source\n\nON\n\n";
-    print_r($this->cachedBlocks);
-    print_r($this->cachedCompiledBlocks);
-    $z = array_search($source, $this->cachedBlocks);
-    echo "GOT = $z\n\n";
-    return $z;
-  }
-
-  public function getCachedCompiledBlock ($index) {
-    return $this->cachedCompiledBlocks[$index];
-  }
-
-  public function cache ($source, $compiled) {
-    $this->cachedBlocks[] = $source;
-    $this->cachedCompiledBlocks[] = $compiled;
-  }
-
-  /**
-   * Does additional transformations to the compiled view after each compilation step
+   * Does additional transformations to the compiled view after each compilation step.
    * @param string $compiledView
    * @return string
    */
   public function postProcess ($compiledView)
   {
-    // Prepend the generated namespace declarations to the compiled view.
-    $prepend = implode ("\n", $this->prolog) . "\n";
-    $this->prolog = array();
-
-    echo $this->blockIndex;
-    if ($this->blockIndex) {
-      if (count ($this->prolog)) {
-        echo "##### INSERT ######\n$prepend\n";
-        $p = strpos ($compiledView, '?>');
-        $compiledView = substr ($compiledView, 0, $p) . $prepend . substr ($compiledView, $p);
-      }
-    } else {
-      echo "##### PREPEND ######\n$prepend\n";
+    if (count ($this->prolog)) {
+      // Prepend the generated namespace declarations to the compiled view.
+      $prepend = implode ("\n", $this->prolog) . "\n";
+      $this->prolog = array();
       $compiledView = "<?php\n$prepend?>$compiledView";
     }
 
@@ -135,15 +76,14 @@ class CompilationContext
    */
   public function registerNamespace ($alias, $namespace)
   {
-    echo "*****REGISTER $alias=$namespace ********\n";
     if (!preg_match ('/^[\w\\\]*$/', $namespace))
       throw new RuntimeException("'$namespace' is an invalid PHP class/namespace.");
     $key = strtolower (Str::camel ($alias));
     $aliasName = $alias ? "'$alias' alias" : 'default alias';
     if (isset($this->ns['']) && strtolower ($ns = $this->ns['']) == $key)
       throw new RuntimeException("The $aliasName conflicts with the default macro class name '$ns'.");
-    if (isset($this->ns[$key])) {echo "#######ERROR#######";exit;}
-      //throw new RuntimeException("Multiple declarations for the $aliasName are not allowed.");
+    if (isset($this->ns[$key]) && $this->ns[$key] != $namespace)
+      throw new RuntimeException("Different declarations for the same $aliasName alias/prefix are not allowed.");
     $this->ns[$key] = $namespace;
   }
 

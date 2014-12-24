@@ -196,7 +196,7 @@ class HyperbladeCompiler extends BladeCompiler
      *   @content
      */
 
-    $view = preg_replace_callback ($this->createPlainMatcher('content'),
+    $view = preg_replace_callback ($this->createPlainMatcher ('content'),
       function ($match) use ($ctx) {
         list ($all, $leadSpace, $trailSpace) = $match;
         return "$leadSpace<?php echo \$my->getContent() ?>$trailSpace";
@@ -418,6 +418,54 @@ class HyperbladeCompiler extends BladeCompiler
     --$ctx->nestingLevel;
 
     return $view;
+  }
+
+  /**
+   * Compile Blade echos into valid PHP.
+   * Special care is taken with echo expressions inside component attributes. In that case, only regular echo tags are
+   * supported and they are converted into a special syntax that components recognize and use it to embed PHP
+   * expressions in the component instantiation.
+   *
+   * @param  string $view
+   * @return string
+   */
+  protected function compileEchos ($view)
+  {
+    $view = preg_replace_callback ('/
+      < ([\w\-]+ : [\w\-]+ \s*)  # match and capture <prefix:tag
+      (.*?)                      # capture attributes
+      >
+      /sx',
+      function ($match) {
+        list ($all, $tag, $attrs) = $match;
+        list ($open, $close) = $this->contentTags;
+        $open = preg_quote ($open);
+        $close = preg_quote ($close);
+
+        $attrs = preg_replace_callback ('/
+          ([\w\-\:]+ \s* = \s*) ("|\') # match attribute="
+          (                            # capture the attribute value
+            (?!' . $open . ')          # while no next interpolator opening tag
+            (?!\2)                     # and no attribute value end quote
+            .*?                        # consume text until interpolator opening tag
+            ' . $open . '              # must have an interpolator
+            (?!' . $close . ').*?      # consume text until interpolator closing tag
+            ' . $close . '             # consume the interpolator closing tag
+            (?!' . $open . ')          # while no next interpolator opening tag
+            (?!\2)                     # and no attribute value end quote
+            .*?                        # consume text
+          )+                           # loop (consume remaining interpolators)
+          \2                           # match the attribute value ending quote
+          /sx',
+          function ($match) {
+            dd ($match);
+            list ($all, $attr, $quote, $value) = $match;
+            return "$attr$quote INTERPOL $quote";
+          }, $attrs);
+
+        return "<$tag$attrs>";
+      }, $view);
+    return parent::compileEchos ($view);
   }
 
   /**

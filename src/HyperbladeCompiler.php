@@ -431,6 +431,7 @@ class HyperbladeCompiler extends BladeCompiler
    */
   protected function compileEchos ($view)
   {
+
     $view = preg_replace_callback ('/
       < ([\w\-]+ : [\w\-]+ \s*)  # match and capture <prefix:tag
       (.*?)                      # capture attributes
@@ -444,17 +445,23 @@ class HyperbladeCompiler extends BladeCompiler
 
         $attrs = preg_replace_callback ('/
           ([\w\-\:]+ \s* = \s*) ("|\') # match attribute="
+          (
           (                            # capture the attribute value
-            (?!' . $open . ')          # while no next interpolator opening tag
-            (?!\2)                     # and no attribute value end quote
-            .*?                        # consume text until interpolator opening tag
+            (?:
+              (?!' . $open . ')        # while no next interpolator opening tag
+              (?!\2)                   # and no attribute value end quote
+              .
+            )*?                        # consume text until interpolator opening tag
             ' . $open . '              # must have an interpolator
             (?!' . $close . ').*?      # consume text until interpolator closing tag
             ' . $close . '             # consume the interpolator closing tag
-            (?!' . $open . ')          # while no next interpolator opening tag
-            (?!\2)                     # and no attribute value end quote
-            .*?                        # consume text
+            (?:
+              (?!' . $open . ')        # while no next interpolator opening tag
+              (?!\2)                   # and no attribute value end quote
+              .                        # consume text
+            )*?
           )+                           # loop (consume remaining interpolators)
+          )
           \2                           # match the attribute value ending quote
           /sx',
           function ($match) {

@@ -405,8 +405,14 @@ class HyperbladeCompiler extends BladeCompiler
         if ($info->getNumberOfParameters () != 3)
           throw new RuntimeException ("Component class $realClass's constructor must have 3 arguments.");
 
-        $attrs = preg_replace ('/(?<=["\'])\s+(?=\w)/', ',', $attrs);
-        $attrs = preg_replace ('/([\w\-]+)\s*=\s*(["\'])(.*?)\\2/', '\'$1\'=>$2$3$2', $attrs);
+
+        // Convert white space separating attributes into commas.
+        $attrs = preg_replace ('/([\w\-\:]+)\s*=\s*("|\')(.*?)\2\s*(?=\w)/', '$1=$2$3$2,', $attrs);
+        $attrs = preg_replace ('/§end\s+(?=\w)/', '§end,', $attrs);
+        // Compile interpolated attributes.
+        $attrs = preg_replace ('/([\w\-\:]+)=§begin(.*?)§end/', '\'$1\'=>$2', $attrs);
+        // Convert attrubutes into PHP array key=>value tuplets.
+        $attrs = preg_replace ('/([\w\-\:]+)\s*=\s*("|\')(.*?)\\2/', '\'$1\'=>$2$3$2', $attrs);
         $content = $this->compileBlock (rtrim ($content), $ctx);
         if (strpos ($content, '<?') === false) {
           $content = str_replace ("'", "\\'", $content);
@@ -443,31 +449,64 @@ class HyperbladeCompiler extends BladeCompiler
         $open = preg_quote ($open);
         $close = preg_quote ($close);
 
+        // Handle attributes with interpolators.
+
         $attrs = preg_replace_callback ('/
-          ([\w\-\:]+ \s* = \s*) ("|\') # match attribute="
-          (
-          (                            # capture the attribute value
-            (?:
-              (?!' . $open . ')        # while no next interpolator opening tag
-              (?!\2)                   # and no attribute value end quote
-              .
-            )*?                        # consume text until interpolator opening tag
-            ' . $open . '              # must have an interpolator
-            (?!' . $close . ').*?      # consume text until interpolator closing tag
-            ' . $close . '             # consume the interpolator closing tag
-            (?:
-              (?!' . $open . ')        # while no next interpolator opening tag
-              (?!\2)                   # and no attribute value end quote
-              .                        # consume text
-            )*?
-          )+                           # loop (consume remaining interpolators)
+          ([\w\-\:]+) \s* = \s* ("|\')   # match attribute="
+          (                              # capture the attribute value
+            (?:                          # for each mixed text and interpolator fragment
+              (?:
+                (?!' . $open . ')        # while no next interpolator opening tag
+                (?!\2)                   # and no attribute value end quote
+                .                        # consume text
+              )*?                        # until interpolator opening tag, optional
+              ' . $open . '              # must have an interpolator
+              (?!' . $close . ').*?      # consume text until interpolator closing tag
+              ' . $close . '             # consume the interpolator closing tag
+              (?:                        # while
+                (?!' . $open . ')        # no next interpolator opening tag
+                (?!\2)                   # and no attribute value end quote
+                .                        # consume text
+              )*?                        # repeat, optional
+            )+                           # loop (consume remaining fragments)
           )
-          \2                           # match the attribute value ending quote
+          \2                             # match the attribute value ending quote
           /sx',
-          function ($match) {
-            dd ($match);
+          function ($match) use ($open, $close) {
             list ($all, $attr, $quote, $value) = $match;
-            return "$attr$quote INTERPOL $quote";
+            $atl = array();
+            // Create an array of literal strings or interpolated expressions. Try to make it as small as possible by
+            // merging adjacent literal strings or inserting simple interpolations into literal strings
+            preg_replace_callback ("/
+              $open \\s* (.*?) \\s* $close  # capture interpolator
+              |                             # or
+              (?:(?!$open).)+               # capture literal text
+            /x", function ($match) use (&$atl) {
+              if (!isset($match[1])) { // it's not an interpolator
+                $seg = str_replace (array('"', '$'), array('\\"', '\$'), $match[0]);
+                if (empty($atl) || $atl[count ($atl) - 1][0] != '"')
+                  $atl[] = '"' . $seg . '"';
+                else $atl[count ($atl) - 1] = substr ($atl[count ($atl) - 1], 0, -1) . $seg . '"';
+              } else if (preg_match ('/^\$?\w+$/', $match[1])) { // if simple interpolation ($VAR)
+                if (empty($atl)) $atl[] = '"' . $match[1] . '"';
+                else {
+                  $e = $atl[count ($atl) - 1];
+                  if ($e[0] == '"')
+                    $atl[count ($atl) - 1] = substr ($e, 0, -1) . $match[1] . '"';
+                  else $atl[] = $match[1];
+                }
+              } else // complex interpolator
+                $atl[] = '(' . $match[1] . ')';
+            }, $value);
+            // Simplify a single expression like "$var" to $var, or (exp) to exp.
+            if (count ($atl) == 1 && preg_match ('/^"\$?\w+"$|^\(.+\)$/', $atl[0]))
+              $atl = array(substr ($atl[0], 1, -1));
+            // At this point $atl contains items either starting with '"' (literal string), '(' (complex expressions)
+            // or '$' (variable name).
+            // Generate PHP string interpolator.
+            $value = implode ('.', $atl);
+            // Mark attribute as being interpolated, it will be handled in a special way on the component processing stage.
+            return "{$attr}=§begin{$value}§end";
           }, $attrs);
 
         return "<$tag$attrs>";

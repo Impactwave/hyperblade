@@ -405,7 +405,6 @@ class HyperbladeCompiler extends BladeCompiler
         if ($info->getNumberOfParameters () != 3)
           throw new RuntimeException ("Component class $realClass's constructor must have 3 arguments.");
 
-
         // Convert white space separating attributes into commas.
         $attrs = preg_replace ('/([\w\-\:]+)\s*=\s*("|\')(.*?)\2\s*(?=\w)/', '$1=$2$3$2,', $attrs);
         $attrs = preg_replace ('/§end\s+(?=\w)/', '§end,', $attrs);
@@ -445,11 +444,15 @@ class HyperbladeCompiler extends BladeCompiler
       /sx',
       function ($match) {
         list ($all, $tag, $attrs) = $match;
-        list ($open, $close) = $this->contentTags;
-        $open = preg_quote ($open);
-        $close = preg_quote ($close);
+        list ($openRaw, $closeRaw) = $this->contentTags;
+        $open = preg_quote ($openRaw);
+        $close = preg_quote ($closeRaw);
 
         // Handle attributes with interpolators.
+
+        $attrs = preg_replace ('/
+          ([\w\-\:]+) \s* = \s* (\$?\w+) # match attribute=$VAR or attribute=constant
+          /x', "$1=\"$openRaw$2$closeRaw\"", $attrs);
 
         $attrs = preg_replace_callback ('/
           ([\w\-\:]+) \s* = \s* ("|\')   # match attribute="

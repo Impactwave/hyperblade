@@ -428,7 +428,7 @@ class HyperbladeCompiler extends BladeCompiler
   /**
    * Compile Blade echos into valid PHP.
    * Special care is taken with echo expressions inside component attributes. In that case, only regular echo tags are
-   * supported and they are converted into a special syntax that components recognize and use it to embed PHP
+   * supported and they are converted into a special syntax that components recognize and that they use to embed PHP
    * expressions in the component instantiation.
    *
    * @param  string $view
@@ -438,21 +438,40 @@ class HyperbladeCompiler extends BladeCompiler
   {
 
     $view = preg_replace_callback ('/
-      < ([\w\-]+ : [\w\-]+ \s*)  # match and capture <prefix:tag
-      (.*?)                      # capture attributes
+      < ([\w\-\:]+)       # match and capture <tag
+      (.*?)               # capture attributes
       >
+      (                   # capture tag content
+        (?:               # loop begin
+          (?=<\1)         # either the same tag is opened again
+          (?R)            # and we must recurse
+        |                 # or
+          (?! <\/\1>).    # consume one char until the closing tag is reached
+        )*                # repeat
+      )
+      <\/\1>             # consume the closing tag
       /sx',
       function ($match) {
-        list ($all, $tag, $attrs) = $match;
+        list ($all, $tag, $attrs, $content) = $match;
         list ($openRaw, $closeRaw) = $this->contentTags;
         $open = preg_quote ($openRaw);
         $close = preg_quote ($closeRaw);
+        /** @var boolean $convertToComponent Set to true when a simple tag must be converted to a component tag */
+        $convertToComponent = false;
+        $isComponent = Str::contains($tag, ':');
+
+        // Simple tags that contain attribute directives must be converted to components
+        // (except for the reserved attribute xmlns).
+
+        if (!$isComponent && preg_match('/\b(?!xmlns:)[\w\-]+:[\w\-]+\s*=/', $attrs))
+          $convertToComponent = true;
 
         // Handle attributes with interpolators.
 
         $attrs = preg_replace ('/
-          ([\w\-\:]+) \s* = \s* (\$?\w+) # match attribute=$VAR or attribute=constant
-          /x', "$1=\"$openRaw$2$closeRaw\"", $attrs);
+          ([\w\-\:]+) \s* = \s* (\$?\w+) # match attribute=$var or attribute=constant
+          /x',
+          "$1=\"$openRaw$2$closeRaw\"", $attrs); // Convert it to attribute="{{var_or_constant}}"
 
         $attrs = preg_replace_callback ('/
           ([\w\-\:]+) \s* = \s* ("|\')   # match attribute="
@@ -475,8 +494,13 @@ class HyperbladeCompiler extends BladeCompiler
           )
           \2                             # match the attribute value ending quote
           /sx',
-          function ($match) use ($open, $close) {
+          function ($match) use ($open, $close, $isComponent, &$convertToComponent) {
             list ($all, $attr, $quote, $value) = $match;
+
+            // Simple tags containing attribute interpolations must be converted to a component.
+            if (!$isComponent)
+              $convertToComponent = true;
+
             $atl = array();
             // Create an array of literal strings or interpolated expressions. Try to make it as small as possible by
             // merging adjacent literal strings or inserting simple interpolations into literal strings
@@ -512,8 +536,15 @@ class HyperbladeCompiler extends BladeCompiler
             return "{$attr}=§begin{$value}§end";
           }, $attrs);
 
-        return "<$tag$attrs>";
+        if ($convertToComponent) {
+          $attrs = " _tag=\"$tag\"$attrs"; //NOTE: do not swap this statement with the next one!
+          $tag = "_h:html";
+        }
+        $content = $this->compileEchos($content);
+
+        return "<$tag$attrs>$content</$tag>";
       }, $view);
+
     return parent::compileEchos ($view);
   }
 

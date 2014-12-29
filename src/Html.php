@@ -5,21 +5,27 @@ namespace contentwave\hyperblade;
  * Generic HTMLcomponent.
  * It simply echoes the source element.
  */
-class Html
+class Html extends component
 {
-  private $attrs;
-  private $html;  //content
-  private $space; //indent
-
-  public function __construct ($attrs, $html, $space)
+  /**
+   * @param array $attrs The component tag's attributes.
+   * @param string $content The component tag's content.
+   * @param array $scope All variables present in the host view's scope.
+   */
+  public function __construct (array $attrs, $content, array $scope)
   {
-    $this->attrs = $attrs;
-    $this->html = $html;
-    $this->space = $space;
+    parent::__construct ($attrs, $content, $scope);
   }
 
-  public function render() {
-    return $this->space.$this->html;
+  protected function render ()
+  {
+    $tag = $this->attr->_tag;
+    unset ($this->attr->_tag);
+    $out = array('<' . $tag);
+    foreach ($this->attr->toArray() as $k => $v)
+      $out[] = " $k=\"$v\"";
+    $out[] = ">\n$this->content\n</$tag>";
+    return implode ('', $out);
   }
 
 }

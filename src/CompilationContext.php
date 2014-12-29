@@ -9,6 +9,10 @@ use RuntimeException, Illuminate\Support\Str;
 class CompilationContext
 {
   /**
+   * Prefix reserved for internal use by the compiler.
+   */
+  const RESERVED_PREFIX = '_h';
+  /**
    * A marker that signals the beginning of a macro tag.
    * This value must be escaped for RegExp.
    * @var string
@@ -37,7 +41,9 @@ class CompilationContext
    * A map of prefixes to namespaces or of alias to classes.
    * @var array
    */
-  public $ns = array();
+  public $ns = array(
+    self::RESERVED_PREFIX => 'contentwave\hyperblade'
+  );
   /**
    * Compilation nesting level.
    * @var int
@@ -48,9 +54,15 @@ class CompilationContext
    * This is only output on the first nesting level.
    * @var array
    */
-  public $prolog = array(
-    'use contentwave\hyperblade as _h;'
-  );
+  public $prolog;
+
+  function __construct ()
+  {
+    $this->prolog = array(
+      'use contentwave\hyperblade as ' . self::RESERVED_PREFIX . ';'
+    );
+  }
+
 
   /**
    * Does additional transformations to the compiled view after each compilation step.
@@ -118,7 +130,7 @@ class CompilationContext
 
   /**
    * Gets the PHP class name for the given xml `prefix:name` tag or attribute.
-   * @param string $prefix
+   * @param string $prefix Dash-cased prefix. Must NOT start with dashes, or they will be lost.
    * @param string $name
    * @return string
    */
@@ -128,7 +140,9 @@ class CompilationContext
     $class = ucfirst (Str::camel ($name));
     if (!class_exists ("$namespace\\$class"))
       throw new RuntimeException("No class was found for <$prefix:$name> on the '$namespace' namespace.");
-    return Str::camel ($prefix) . "\\$class";
+    // Perform dash-case to camel-case conversion. Do NOT use Str::camel !
+    $prefix = lcfirst(str_replace(' ', '', ucwords(str_replace('-', ' ', $prefix))));
+    return "$prefix\\$class";
   }
 
   /**

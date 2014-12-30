@@ -2,29 +2,33 @@
 namespace contentwave\hyperblade;
 
 /**
- * Generic HTMLcomponent.
+ * Generic HTML component.
+ *
  * It simply echoes the source element.
+ * It is useful as a way to run mixins over arbitrary HTML elements.
+ *
+ * An instance of this component is created by the view compiler for every HTML tag that contains one or more
+ * attribute directives.
+ *
+ * The `tag` attribute sets the tag to be outputted.
  */
-class Html extends component
+class Html extends Component
 {
-  /**
-   * @param array $attrs The component tag's attributes.
-   * @param string $content The component tag's content.
-   * @param array $scope All variables present in the host view's scope.
-   */
   public function __construct (array $attrs, $content, array $scope)
   {
     parent::__construct ($attrs, $content, $scope);
+    $this->tag = $this->attr->tag;
+    unset ($this->attr->tag);
   }
 
   protected function render ()
   {
-    $tag = $this->attr->_tag;
-    unset ($this->attr->_tag);
-    $out = array('<' . $tag);
-    foreach ($this->attr->toArray() as $k => $v)
-      $out[] = " $k=\"$v\"";
-    $out[] = ">\n$this->content\n</$tag>";
+    $out = array("<$this->tag");
+    foreach ($this->attr->toArray () as $k => $v)
+      $out[] = ' ' . self::toAttribute ($k, $v);
+    $out[] = '>';
+    $out[] = $this->getContent ();
+    $out[] = "</$this->tag>";
     return implode ('', $out);
   }
 

@@ -1,15 +1,26 @@
 <?php
 namespace contentwave\hyperblade;
 
-use RuntimeException;
-
 /**
  * Base class for components.
  * Using this class is not mandatory. You can create your classes for handling components without extending this class.
  * What this class gives you is a set of standard behaviors that make it easier to develop components.
  */
-class Component
+abstract class Component
 {
+  /**
+   * The component's tag name.
+   * This should be set on each component class, unless it's not applicable.
+   * @var string
+   */
+  public static $tagName = '';
+  /**
+   * The component's tag name.
+   * This is initially set to `static::$tagName`.
+   * It can be dinamically set at runtime to change the way the component is output, for some component types.
+   * @var string
+   */
+  public $tag;
   /**
    * The component's attribute names and values.
    * @var PropertyList
@@ -50,11 +61,6 @@ class Component
    * @var PropertyList
    */
   protected $scope;
-  /**
-   * Override this to set the view template for your custom component.
-   * @var string
-   */
-  protected $templateName;
 
   /**
    * Adds the given space to the beginning of each line in the input string, except for the first line.
@@ -78,6 +84,29 @@ class Component
     return preg_replace ("/^$space/m", '', $str);
   }
 
+  /**
+   * Creates a component instance.
+   *
+   * This is called by the compiled view.
+   *
+   * @param array $attrs The component tag's attributes.
+   * @param string $content The component tag's content.
+   * @param array $scope All variables present in the host view's scope.
+   */
+  public function __construct (array $attrs, $content, array $scope)
+  {
+    $this->tag = static::$tagName;
+    $this->scope = new PropertyList;
+    $this->attr = new PropertyList($attrs);
+    $this->content = $content;
+    $this->viewFactory = $scope['__env'];
+    $this->viewPath = $scope['__path'];
+    $this->viewScope = new PropertyList($scope);
+  }
+
+  /**
+   * Outputs the current scope's content for debugging purposes and stops execution.
+   */
   public function debugScope ()
   {
     $this->scope->app = 'Application instance not shown...';
@@ -85,6 +114,9 @@ class Component
     dd ((object)$this->scope->toArray ());
   }
 
+  /**
+   * Outputs the encolsing view scope's content for debugging purposes and stops execution.
+   */
   public function debugViewScope ()
   {
     $this->viewScope->app = 'Application instance not shown...';
@@ -94,51 +126,93 @@ class Component
   }
 
   /**
-   * @param array $attrs The component tag's attributes.
-   * @param string $content The component tag's content.
-   * @param array $scope All variables present in the host view's scope.
+   * Allows merging additional data into the scope directly from the view's template.
+   * This is used by the '@ config' directive.
+   * @param array|\Illuminate\Contracts\Support\Arrayable $data
    */
-  public function __construct (array $attrs, $content, array $scope)
-  {
-    $this->scope = new PropertyList;
-    $this->attr = new PropertyList($attrs);
-    $this->content = $content;
-    $this->viewFactory = $scope['__env'];
-    $this->viewPath = $scope['__path'];
-    $this->viewScope = new PropertyList($scope);
-  }
-
   public function config ($data)
   {
     $this->scope->extend ($data);
   }
 
+  /**
+   * Returns the component's dinamically generated content or, if none is provided by the component subclass, it
+   * returns the original transcluded content from the view.
+   *
+   * This is called by the '@ content' directive.
+   *
+   * @return string
+   */
   public function getContent ()
   {
     return $this->content;
   }
 
+  /**
+   * Runs the component and returns the generated output.
+   * This is called by the view after instantiating the component.
+   * @return string
+   */
   public function run ()
   {
     $this->setViewModel ();
     return $this->render ();
   }
 
+  /**
+   * Applies the given mixins to the component.
+   * This is called by the view after instantiating the component if it has one or more mixins.
+   *
+   * @param Mixin ...$args One or more mixin instances.
+   * @return Component self for chaining.
+   */
+  public function mixin ($test)
+  {
+    $mixins = func_get_args();
+    foreach ($mixins as $mixin)
+      $mixin->run ($this);
+    return $this;
+  }
+
+  /**
+   * Override on subclasses to set data on the scope to be used by the view for rendering.
+   * By default, it sets the 'my' variable that can be used to refer nack to the component instance from the view.
+   */
   protected function setViewModel ()
   {
     $this->scope->my = $this;
   }
 
-  protected function render ()
+  /**
+   * Generates the component's output.
+   * Override to provide custom content generation.
+   * @return string
+   */
+  abstract protected function render ();
+
+  /**
+   * Generates a textual representation of an attribute.
+   * @param string $name
+   * @param mixed $value
+   * @return string
+   */
+  public static function toAttribute ($name, $value)
   {
-    if (!$this->templateName)
-      throw new RuntimeException("No template is set for component " . get_called_class ());
-    $result = $this->viewFactory->make (
-      $this->templateName,
-      $this->scope,
-      array_except ($this->viewScope->toArray (), array('__data', '__path'))
-    )->render ();
-    return $result;
+    switch (gettype ($value)) {
+      case 'boolean':
+        return $value ? $name : '';
+      case 'integer':
+      case 'double':
+        return "$name=$value";
+      case 'array':
+        $value = implode (' ', $value);
+        return "$name=\"$value\"";
+      case 'object':
+        $value = json_encode ($value);
+        return "$name='$value'";
+      default:
+        return "$name=\"$value\"";
+    }
   }
 
 }

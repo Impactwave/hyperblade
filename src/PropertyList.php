@@ -6,8 +6,13 @@ use Illuminate\Contracts\Support\Arrayable;
 
 /**
  * Allow access to array data as object properties.
- * Unset properties will return null.
- * Note: the original array is not affected by mutations on instances of this class.
+ *
+ * <p>Features:
+ * - Unset properties will return null.
+ * - Property reads will return a reference to the stored array at the specified key, which allows you to mutate properties
+ * having array values.
+ * - The original array passed to the constructor will not be affected by mutations on instances of this class.
+ * - Implements some useful operations (ex: extend).
  */
 class PropertyList implements Arrayable, Countable
 {
@@ -24,9 +29,10 @@ class PropertyList implements Arrayable, Countable
     $this->items = $items ?: array();
   }
 
-  function __get ($name)
+  function &__get ($name)
   {
-    return isset($this->items[$name]) ? $this->items[$name] : null;
+    static $_null = null;
+    if (isset($this->items[$name])) return $this->items[$name]; else return $_null;
   }
 
   function __set ($name, $value)
@@ -59,13 +65,32 @@ class PropertyList implements Arrayable, Countable
     return count ($this->items);
   }
 
+  public function keys ()
+  {
+    return array_keys ($this->items);
+  }
+
+  public function values ()
+  {
+    return array_values ($this->items);
+  }
+
   /**
    * Merges in the given data.
-   * @param array|Arrayable $data
+   * @param array|Arrayable $data Note: PropertyList values are also supported (because they are Arrayable).
    */
   public function extend ($data)
   {
     $this->items = array_merge ($this->items, $data instanceof Arrayable ? $data->toArray () : $data);
+  }
+
+  /**
+   * Applies the specified default values to the corresponding properties that are unset.
+   * @param array|Arrayable $data Note: PropertyList values are also supported (because they are Arrayable).
+   */
+  public function defaults ($data)
+  {
+    $this->items += $data instanceof Arrayable ? $data->toArray () : $data;
   }
 
 }

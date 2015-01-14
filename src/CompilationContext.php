@@ -139,7 +139,7 @@ class CompilationContext
     $namespace = $this->getNamespace ($prefix);
     $class = ucfirst (Str::camel ($name));
     if (!class_exists ("$namespace\\$class"))
-      throw new RuntimeException("No class was found for <$prefix:$name> on the '$namespace' namespace.");
+      throw new RuntimeException("Class '$namespace\\$class' was not found for <$prefix:$name>.");
     // Perform dash-case to camel-case conversion. Do NOT use Str::camel !
     $prefix = lcfirst(str_replace(' ', '', ucwords(str_replace('-', ' ', $prefix))));
     return "$prefix\\$class";
@@ -156,7 +156,7 @@ class CompilationContext
     $namespace = $this->getNamespace ($prefix);
     $class = ucfirst (Str::camel ($name));
     if (!class_exists ("$namespace\\$class"))
-      throw new RuntimeException("No class was found for <$prefix:$name> on the '$namespace' namespace.");
+      throw new RuntimeException("Class '$namespace\\$class' was not found for <$prefix:$name>.");
     return "$namespace\\$class";
   }
 

@@ -24,8 +24,7 @@ class Html extends Component
   protected function render ()
   {
     $out = array("<$this->tag");
-    foreach ($this->attr->toArray () as $k => $v)
-      $out[] = ' ' . self::toAttribute ($k, $v);
+    $out[] = $this->generateAttributes ();
     $out[] = '>';
     $out[] = $this->getContent ();
     $out[] = "</$this->tag>";

@@ -98,6 +98,8 @@ abstract class Component
     $this->tag = static::$tagName;
     $this->scope = new PropertyList;
     $this->attr = new PropertyList($attrs);
+    $this->attr->class = self::attrToArray ($this->attr->class);
+    $this->attr->style = self::attrToArray ($this->attr->style);
     $this->content = $content;
     $this->viewFactory = $scope['__env'];
     $this->viewPath = $scope['__path'];
@@ -166,12 +168,38 @@ abstract class Component
    * @param Mixin ...$args One or more mixin instances.
    * @return Component self for chaining.
    */
-  public function mixin ($test)
+  public function mixin ()
   {
-    $mixins = func_get_args();
+    $mixins = func_get_args ();
     foreach ($mixins as $mixin)
       $mixin->run ($this);
     return $this;
+  }
+
+  /**
+   * Adds a class name to the component's class attribute.
+   * @param string $className
+   */
+  public function addCssClass ($className)
+  {
+    if (array_search ($className, $this->attr->class) === false)
+      array_push ($this->attr->class, $className);
+  }
+
+  /**
+   * Generates a textual representation of all the component's attributes.
+   *
+   * @return string
+   */
+  public function generateAttributes ()
+  {
+    $o = '';
+    foreach ($this->attr->toArray () as $k => $v) {
+      $v = self::toAttribute ($k, $v);
+      if (isset($v))
+        $o .= " $v";
+    }
+    return $o;
   }
 
   /**
@@ -192,9 +220,17 @@ abstract class Component
 
   /**
    * Generates a textual representation of an attribute.
+   *
+   * <p>Array attribute values are converted to space-separated value string lists.
+   * > A useful use case for an array attribute is the `class` attribute.
+   *
+   * Object attribute values generate a space-separated list of keys who's corresponding value is truthy.
+   *
+   * Boolean values will generate a valueless attribute if true, otherwise no attribute is output.
+   *
    * @param string $name
    * @param mixed $value
-   * @return string
+   * @return string|null If null, the attribute should not be output by the caller (ex: by <code>generateAttributes()</code>).
    */
   public static function toAttribute ($name, $value)
   {
@@ -205,14 +241,40 @@ abstract class Component
       case 'double':
         return "$name=$value";
       case 'array':
+        if (empty($value)) return null;
         $value = implode (' ', $value);
+        $value = htmlspecialchars ($value, ENT_QUOTES);
         return "$name=\"$value\"";
       case 'object':
-        $value = json_encode ($value);
+        $at = [];
+        foreach ($value as $k => $v)
+          if ($v) $at[] = $k;
+        $value = explode (' ', $at);
         return "$name='$value'";
       default:
+        $value = htmlspecialchars ($value, ENT_QUOTES);
         return "$name=\"$value\"";
     }
   }
 
+  /**
+   * Converts an attribute value into an array.
+   *
+   * This is useful for attributes that always store their values as arrays (ex: class, style).
+   *
+   * @param mixed $value
+   * @return array
+   */
+  public static function attrToArray ($value)
+  {
+    if (is_null ($value)) return [];
+    if (is_array ($value)) return $value;
+    if (is_object ($value)) {
+      $at = [];
+      foreach ($value as $k => $v)
+        if ($v) $at[] = $k;
+      return $at;
+    }
+    return explode (' ', strval ($value));
+  }
 }

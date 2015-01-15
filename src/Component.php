@@ -224,7 +224,9 @@ abstract class Component
    * <p>Array attribute values are converted to space-separated value string lists.
    * > A useful use case for an array attribute is the `class` attribute.
    *
-   * Object attribute values generate a space-separated list of keys who's corresponding value is truthy.
+   * Object attribute values generate either:
+   * - a space-separated list of keys who's corresponding value is truthy;
+   * - a semicolon-separated list of key:value elements if at least one value is a string.
    *
    * Boolean values will generate a valueless attribute if true, otherwise no attribute is output.
    *
@@ -235,25 +237,19 @@ abstract class Component
   public static function toAttribute ($name, $value)
   {
     switch (gettype ($value)) {
+      case 'string':
+        return e ($value); // Calls contentwave\hyperblade\e
       case 'boolean':
         return $value ? $name : '';
       case 'integer':
       case 'double':
         return "$name=$value";
       case 'array':
-        if (empty($value)) return null;
-        $value = implode (' ', $value);
-        $value = htmlspecialchars ($value, ENT_QUOTES);
+        if (empty($value)) return null; //see doc-comment.
+        $value = e ($value); // Calls contentwave\hyperblade\e
         return "$name=\"$value\"";
-      case 'object':
-        $at = [];
-        foreach ($value as $k => $v)
-          if ($v) $at[] = $k;
-        $value = explode (' ', $at);
-        return "$name='$value'";
       default:
-        $value = htmlspecialchars ($value, ENT_QUOTES);
-        return "$name=\"$value\"";
+        throw new \InvalidArgumentException("Invalid value of type " . gettype ($value) . " for attribute $name ");
     }
   }
 

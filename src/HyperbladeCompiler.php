@@ -19,6 +19,50 @@ function out ($str, $space)
 }
 
 /**
+ * Escapes (secures) data for output.<br>
+ * Hyperblade extends Blade's output escaping with support for additional data types.
+ *
+ * <p>Array attribute values are converted to space-separated value string lists.
+ * > A useful use case for an array attribute is the `class` attribute.
+ *
+ * Object attribute values generate either:
+ * - a space-separated list of keys who's corresponding value is truthy;
+ * - a semicolon-separated list of key:value elements if at least one value is a string.
+ *
+ * Boolean values will generate the string "true" or "false".
+ *
+ * @param mixed $o
+ * @return string
+ */
+function e ($o)
+{
+  if (!is_string ($o)) {
+    switch (gettype ($o)) {
+      case 'boolean':
+        return $o ? 'true' : 'false';
+      case 'integer':
+      case 'double':
+        return strval ($o);
+      case 'array':
+        $at = [];
+        $s = ' ';
+        foreach ($o as $k => $v)
+          if (is_numeric ($k))
+            $at[] = $v;
+          else if (is_string ($v)) {
+            $at[] = "$k:$v";
+            $s = ';';
+          } else $at[] = $k;
+        $o = implode ($s, $at);
+        break;
+      default:
+        throw new \InvalidArgumentException("Can't output a value of type " . gettype ($o));
+    }
+  }
+  return htmlentities ($o, ENT_QUOTES, 'UTF-8', false);
+}
+
+/**
  * An extension to the Blade templating engine that provides macros and components.
  */
 class HyperbladeCompiler extends BladeCompiler
@@ -44,6 +88,7 @@ class HyperbladeCompiler extends BladeCompiler
   {
     parent::__construct ($files, $cachePath);
     $this->compilers[] = 'HyperbladeDirectives';
+    $this->setEchoFormat ('_h\e(%s)');
   }
 
   /**
@@ -353,8 +398,7 @@ class HyperbladeCompiler extends BladeCompiler
     $view = preg_replace_callback ('/
         (^\s*)?                 # capture white space from the beginning of the line
         < ([\w\-]+) : ([\w\-]+) # match and capture <prefix:tag
-        \s*(.*?)                # capture attributes
-        >
+        ' . self::attributesCaptureRegEx (3) . '
         (                       # capture tag content
           (?:                   # loop begin
             (?=<\1:\2[\s>])     # either the same tag is opened again
@@ -366,7 +410,7 @@ class HyperbladeCompiler extends BladeCompiler
         <\/\2:\3>               # consume the closing tag
       /smx',
       function ($match) use ($ctx) {
-        list ($all, $indent, $prefix, $tag, $attrList, $content) = $match;
+        list (, $indent, $prefix, $tag, $attrList, , $content) = $match;
         $class = $ctx->getClass ($prefix, $tag);
 
         $realClass = $ctx->getFQClass ($prefix, $tag);
@@ -461,11 +505,11 @@ class HyperbladeCompiler extends BladeCompiler
    */
   protected function compileEchos ($view)
   {
+    // Capture all <tag attributes>content</tag> blocks on a view.
 
     $view = preg_replace_callback ('/
       < ([\w\-\:]+)       # match and capture <tag
-      (.*?)               # capture attributes
-      >
+      ' . self::attributesCaptureRegEx (1) . '
       (                   # capture tag content
         (?:               # loop begin
           (?=<\1[\s>])    # either the same tag is opened again
@@ -477,18 +521,23 @@ class HyperbladeCompiler extends BladeCompiler
       <\/\1>             # consume the closing tag
       /sx',
       function ($match) {
-        list ($all, $tag, $attrs, $content) = $match;
+        list (, $tag, $attrs, , $content) = $match;
         list ($openRaw, $closeRaw) = $this->contentTags;
         $open = preg_quote ($openRaw);
         $close = preg_quote ($closeRaw);
-        /** @var boolean $convertToComponent Set to true when a simple tag must be converted to a component tag */
+        /**
+         * Set to true when a simple tag must be converted to a component tag.
+         * @var boolean $convertToComponent
+         */
         $convertToComponent = false;
+
+        // Tag's with prefix are already components.
         $isComponent = Str::contains ($tag, ':');
 
-        // Simple tags that contain attribute directives must be converted to components
+        // Simple (non prefixed) tags that contain attribute mixins must be converted to components
         // (except for the reserved attribute xmlns).
 
-        if (!$isComponent && preg_match ('/\b(?!xmlns:)[\w\-]+:[\w\-]+\s*=/', $attrs))
+        if (!$isComponent && preg_match ('/(?:^| )(?!xmlns:)[\w\-]+:[\w\-]+\s*=/', $attrs))
           $convertToComponent = true;
 
         // Handle attributes with PHP constant values (ex: attr=12 attr=false).
@@ -500,7 +549,10 @@ class HyperbladeCompiler extends BladeCompiler
 
         // Handle attributes with interpolators.
 
-        if ($isComponent) // static html tags do not need interpolated attribute transformations
+        // Static html tags do not need interpolated attribute transformations, so standard Blade output code will be
+        // generated for those interpolations.
+        // On the other hand, components with attribute interpolations must be handled differently.
+        if ($isComponent || $convertToComponent)
 
           $attrs = preg_replace_callback ('/
             ([\w\-\:]+) \s* = \s* ("|\')   # match attribute="
@@ -524,32 +576,33 @@ class HyperbladeCompiler extends BladeCompiler
             \2                             # match the attribute value ending quote
             /sx',
             function ($match) use ($open, $close) {
-              list ($all, $attr, $quote, $value) = $match;
+              list (, $attr, , $value) = $match;
 
               $atl = array();
               // Create an array of literal strings or interpolated expressions. Try to make it as small as possible by
-              // merging adjacent literal strings or inserting simple interpolations into literal strings
+              // merging adjacent literal strings or by inserting native PHP interpolations into literal strings.
               preg_replace_callback ("/
-              $open \\s* (.*?) \\s* $close  # capture interpolator
-              |                             # or
-              (?:(?!$open).)+               # capture literal text
-            /x", function ($match) use (&$atl) {
-                if (!isset($match[1])) { // it's not an interpolator
-                  $seg = str_replace (array('"', '$'), array('\\"', '\$'), $match[0]);
-                  if (empty($atl) || $atl[count ($atl) - 1][0] != '"')
-                    $atl[] = '"' . $seg . '"';
-                  else $atl[count ($atl) - 1] = substr ($atl[count ($atl) - 1], 0, -1) . $seg . '"';
-                } else if (preg_match ('/^\$?\w+$/', $match[1])) { // if simple interpolation ($VAR)
-                  if (empty($atl)) $atl[] = '"' . $match[1] . '"';
-                  else {
-                    $e = $atl[count ($atl) - 1];
-                    if ($e[0] == '"')
-                      $atl[count ($atl) - 1] = substr ($e, 0, -1) . $match[1] . '"';
-                    else $atl[] = $match[1];
-                  }
-                } else // complex interpolator
-                  $atl[] = '(' . $match[1] . ')';
-              }, $value);
+                $open \\s* (.*?) \\s* $close  # capture interpolator
+                |                             # or
+                (?:(?!$open).)+               # capture literal text
+              /x",
+                function ($match) use (&$atl) {
+                  if (!isset($match[1])) { // it's not an interpolator.
+                    $seg = str_replace (array('"', '$'), array('\\"', '\$'), $match[0]);
+                    if (empty($atl) || $atl[count ($atl) - 1][0] != '"')
+                      $atl[] = '"' . $seg . '"';
+                    else $atl[count ($atl) - 1] = substr ($atl[count ($atl) - 1], 0, -1) . $seg . '"';
+                  } else if (preg_match ('/^\$?\w+$/', $match[1])) { // if simple interpolation ($VAR)
+                    if (empty($atl)) $atl[] = '"' . $match[1] . '"';
+                    else {
+                      $e = $atl[count ($atl) - 1];
+                      if ($e[0] == '"')
+                        $atl[count ($atl) - 1] = substr ($e, 0, -1) . $match[1] . '"';
+                      else $atl[] = $match[1];
+                    }
+                  } else // complex interpolator
+                    $atl[] = '(' . $match[1] . ')';
+                }, $value);
               // Simplify a single expression like "$var" to $var, or (exp) to exp.
               if (count ($atl) == 1 && preg_match ('/^"\$?\w+"$|^\(.+\)$/', $atl[0]))
                 $atl = array(substr ($atl[0], 1, -1));
@@ -600,4 +653,25 @@ class HyperbladeCompiler extends BladeCompiler
     return isset($this->wasCompiled[$path]) ? false : parent::isExpired ($path);
   }
 
+  /**
+   * Regular Expression pattern fragment for extracting attributes from a tag.
+   * Insert this after the tag name capture.
+   * The host regex must have /sx options.
+   * Two capture groups will be added to the regex match; the first contains the attributes, the second is dummy.
+   * @param int $groupOffset
+   * @return string
+   */
+  protected function attributesCaptureRegEx ($groupOffset)
+  {
+    $o = $groupOffset + 2;
+    return "\\s*          # trim leading space
+      (                   # capture attributes
+        (?:               # loop begin
+          (\"|')          # either the next char is quote
+          [^\\$o]*        # so consume everything until the next identical quote
+        |                 # or
+          [^>]            # consume the next char if it is not the delimiter ending the tag head.
+        )                 # repeat
+      ) >                 # consume the tag delimiter";
+  }
 }

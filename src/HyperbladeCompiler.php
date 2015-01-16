@@ -396,21 +396,21 @@ class HyperbladeCompiler extends BladeCompiler
      * `prefix` can be dash-cased.
      */
     $view = preg_replace_callback ('/
-        (^\s*)?                 # capture white space from the beginning of the line
-        < ([\w\-]+) : ([\w\-]+) # match and capture <prefix:tag
-        ' . self::attributesCaptureRegEx (3) . '
-        (                       # capture tag content
-          (?:                   # loop begin
-            (?=<\1:\2[\s>])     # either the same tag is opened again
-            (?R)                # and we must recurse
-          |                     # or
-            (?! <\/\2:\3>).     # consume one char until the closing tag is reached
-          )*                    # repeat
+        (^\s*)?                                 # capture white space from the beginning of the line
+        < ([\w\-]+) : ([\w\-]+)                 # match and capture <prefix:tag
+        ' . self::$attributesCaptureRegEx . '   # capture the tag\'s attributes
+        (                                       # capture the tag\'s content
+          (?:                                   # loop begin
+            (?=<\2:\3[\s>])                     # either the same tag is opened again
+            (?R)                                # and we must recurse
+          |                                     # or
+            (?! <\/\2:\3>).                     # consume one char until the closing tag is reached
+          )*                                    # repeat
         )
-        <\/\2:\3>               # consume the closing tag
+        <\/\2:\3>                               # consume the closing tag
       /smx',
       function ($match) use ($ctx) {
-        list (, $indent, $prefix, $tag, $attrList, , $content) = $match;
+        list (, $indent, $prefix, $tag, $attrList, $content) = $match;
         $class = $ctx->getClass ($prefix, $tag);
 
         $realClass = $ctx->getFQClass ($prefix, $tag);
@@ -508,20 +508,20 @@ class HyperbladeCompiler extends BladeCompiler
     // Capture all <tag attributes>content</tag> blocks on a view.
 
     $view = preg_replace_callback ('/
-      < ([\w\-\:]+)       # match and capture <tag
-      ' . self::attributesCaptureRegEx (1) . '
-      (                   # capture tag content
-        (?:               # loop begin
-          (?=<\1[\s>])    # either the same tag is opened again
-          (?R)            # and we must recurse
-        |                 # or
-          (?! <\/\1>).    # consume one char until the closing tag is reached
-        )*                # repeat
+      < ([\w\-\:]+)                           # match and capture <tag
+      ' . self::$attributesCaptureRegEx . '   # capture the tag\'s attributes
+      (                                       # capture the tag\'s content
+        (?:                                   # loop begin
+          (?=<\1[\s>])                        # either another tag with the same name opens
+          (?R)                                # and we must recurse
+        |                                     # or
+          (?! <\/\1>).                        # consume one char until the closing tag is reached
+        )*                                    # repeat
       )
-      <\/\1>             # consume the closing tag
+      <\/\1>                                  # consume the closing tag
       /sx',
       function ($match) {
-        list (, $tag, $attrs, , $content) = $match;
+        list (, $tag, $attrs, $content) = $match;
         list ($openRaw, $closeRaw) = $this->contentTags;
         $open = preg_quote ($openRaw);
         $close = preg_quote ($closeRaw);
@@ -615,7 +615,7 @@ class HyperbladeCompiler extends BladeCompiler
             }, $attrs);
 
         if ($convertToComponent) {
-          $attrs = " tag=\"$tag\"$attrs"; //NOTE: do not swap this statement with the next one!
+          $attrs = " tag=\"$tag\" $attrs"; //NOTE: do not swap this statement with the next one!
           $tag = "_h:html";
         }
         $content = $this->compileEchos ($content);
@@ -657,21 +657,23 @@ class HyperbladeCompiler extends BladeCompiler
    * Regular Expression pattern fragment for extracting attributes from a tag.
    * Insert this after the tag name capture.
    * The host regex must have /sx options.
-   * Two capture groups will be added to the regex match; the first contains the attributes, the second is dummy.
-   * @param int $groupOffset
-   * @return string
+   * One capture group will be added to the regex match containing all the attributes.
+   * @var string
    */
-  protected function attributesCaptureRegEx ($groupOffset)
-  {
-    $o = $groupOffset + 2;
-    return "\\s*          # trim leading space
-      (                   # capture attributes
-        (?:               # loop begin
-          (\"|')          # either the next char is quote
-          [^\\$o]*        # so consume everything until the next identical quote
-        |                 # or
-          [^>]            # consume the next char if it is not the delimiter ending the tag head.
-        )                 # repeat
-      ) >                 # consume the tag delimiter";
-  }
+  protected static $attributesCaptureRegEx =
+    "\\s*                 # trim leading space
+    (                   # capture attributes
+      (?:               # loop begin
+        \"              # either the next char is a double quote
+        [^\"]*          # so consume everything until the next double quote
+        \"
+      |                 # or
+        '               # the next char is a single quote
+        [^']*           # so consume everything until the next single quote
+        '
+      |                 # or
+        [^>]            # consume the next char if it is not the delimiter ending the tag head
+      )*                # repeat
+    ) >                 # consume the tag delimiter
+  ";
 }

@@ -1,7 +1,7 @@
 <?php
 namespace contentwave\hyperblade;
 
-use Blade, RuntimeException, Illuminate\Support\Str, Illuminate\View\Compilers\BladeCompiler;
+use RuntimeException, Illuminate\Support\Str, Illuminate\View\Compilers\BladeCompiler;
 use Illuminate\Filesystem\Filesystem;
 
 /**
@@ -55,6 +55,8 @@ function e ($o)
           } else $at[] = $k;
         $o = implode ($s, $at);
         break;
+      case 'NULL':
+        return '';
       default:
         throw new \InvalidArgumentException("Can't output a value of type " . gettype ($o));
     }
@@ -87,7 +89,7 @@ class HyperbladeCompiler extends BladeCompiler
   public function __construct (Filesystem $files, $cachePath)
   {
     parent::__construct ($files, $cachePath);
-    $this->compilers[] = 'HyperbladeDirectives';
+    array_unshift ($this->compilers, 'HyperbladeDirectives');
     $this->setEchoFormat ('_h\e(%s)');
   }
 
@@ -107,7 +109,7 @@ class HyperbladeCompiler extends BladeCompiler
   /**
    * Compile the given Hyperblade template contents.
    *
-   * @param  string $value
+   * @param  string $view
    * @return string
    */
   public function compileString ($view)
@@ -170,7 +172,7 @@ class HyperbladeCompiler extends BladeCompiler
     $view = preg_replace_callback ('/(?<!\w)(\s*)@use\s*\(\s*(\S+)\s*(?:as\s*([\w\-]+)\s*)?\)\s*$/m',
       function ($match) use ($ctx) {
         $match[] = ''; // the default namespace.
-        list ($all, $space, $FQN, $alias) = $match;
+        list (, $space, $FQN, $alias) = $match;
         $ctx->registerNamespace ($alias, $FQN);
         if ($alias) {
           $alias = $ctx->getNormalizedPrefix ($alias);
@@ -226,7 +228,7 @@ class HyperbladeCompiler extends BladeCompiler
 
     $view = preg_replace_callback ('/@config\s*^(.*?)^\s*@endconfig\s*/sm',
       function ($match) use ($ctx) {
-        list ($all, $content) = $match;
+        list (, $content) = $match;
         $content = substr (preg_replace ('/^(\s*)(\S+?):(\s*)(\S+)\s*$/m', '$1\'$2\'=>$3$4,', $content), 0, -1);
         $ctx->prolog[] = "\$my->config(array(\n$content\n));";
         return ''; //suppress directive
@@ -243,7 +245,7 @@ class HyperbladeCompiler extends BladeCompiler
 
     $view = preg_replace_callback ($this->createPlainMatcher ('content'),
       function ($match) use ($ctx) {
-        list ($all, $leadSpace, $trailSpace) = $match;
+        list (, $leadSpace, $trailSpace) = $match;
         return "$leadSpace<?php echo \$my->getContent() ?>$trailSpace";
       }, $view);
 
@@ -277,7 +279,7 @@ class HyperbladeCompiler extends BladeCompiler
         (?! \s*' . $ctx->MACRO_BEGIN . ')                     # do not match macros with a content block
         (?! \s*\( )                                           # must not have skipped the arguments list
         /sxm',
-      function ($match) use ($ctx, $view, $allends) {
+      function ($match) use ($ctx) {
         array_push ($match, ''); // allow $args to be undefined.
         list ($all, $space, $alias, $method, $args) = $match;
 
@@ -343,7 +345,7 @@ class HyperbladeCompiler extends BladeCompiler
         ' . $end . '                                          # match the macro end tag
         /sxm',
       function ($match) use ($ctx) {
-        list ($all, $space, $alias, $method, $args, $content) = $match;
+      list ($all, $space, $alias, $method, $args, $content) = $match;
         preg_match ('/[\n\r]([ \t]*)$/', $space, $m);
 
         $indent = isset($m[1]) ? $m[1] : '';
@@ -398,7 +400,12 @@ class HyperbladeCompiler extends BladeCompiler
     $view = preg_replace_callback ('/
         (^\s*)?                                 # capture white space from the beginning of the line
         < ([\w\-]+) : ([\w\-]+)                 # match and capture <prefix:tag
-        ' . self::$attributesCaptureRegEx . '   # capture the tag\'s attributes
+        (                                       # capture the tag\'s attributes
+          (?:                                   # loop begin
+          ' . self::$attributeCaptureRegEx . '  # match next attribute
+          )*                                    # repeat for each attribute found
+        )                                       # end capture
+        >                                       # match the tag closing delimiter
         (                                       # capture the tag\'s content
           (?:                                   # loop begin
             (?=<\2:\3[\s>])                     # either the same tag is opened again
@@ -410,9 +417,21 @@ class HyperbladeCompiler extends BladeCompiler
         <\/\2:\3>                               # consume the closing tag
       /smx',
       function ($match) use ($ctx) {
-        list (, $indent, $prefix, $tag, $attrList, $content) = $match;
-        $class = $ctx->getClass ($prefix, $tag);
+      list (, $indent, $prefix, $tag, $attrList, , , $content) = $match;
 
+        // The reserved predefined prefix 'html' is used to promote a simple tag to a gemeric html component.
+        // This allows mixins to be recognized.
+        // No PHP namespace needs to be associated with this special prefix, neither is the prefix registered.
+
+        if ($prefix == 'html') {
+          $attrList = " tag=\"$tag\"$attrList";
+          $tag = "html";
+          $prefix = '_h';
+        }
+
+        // Find the component implementation.
+
+        $class = $ctx->getClass ($prefix, $tag);
         $realClass = $ctx->getFQClass ($prefix, $tag);
         $info = new \ReflectionMethod($realClass, '__construct');
         if ($info->getNumberOfParameters () != 3)
@@ -426,27 +445,19 @@ class HyperbladeCompiler extends BladeCompiler
         $mixinsList = '';
 
         if ($attrList) {
-          if (!preg_match_all ('/
-            ([\w\-\:]+)         # capture attribute name and eventual prefix
-            \s*=\s*             # match =
-            (                   # capture either
-              ("|\')(.*?)\3     # (double)quote + content + matching quote
-              |                 # or
-              §begin(.*?)§end   # PHP expression generated by previous preprocessing step
-            )
-          /sxm', $attrList, $match2, PREG_SET_ORDER)
-          )
-            throw new RuntimeException ("Invalid markup inside tag; not a valid attribute:\n\n$attrList");
+          preg_match_all ('/
+            ' . self::$attributeCaptureRegEx . '  # match attribute
+            /sxm', $attrList, $match2, PREG_SET_ORDER
+          );
 
           // Build attributes map.
 
           foreach ($match2 as $m) {
             $m[] = null; // supply last match group if it's absent.
-            list (, $name, $val, $quote, $unquoted, $exp) = $m;
-            if (isset($exp))
-              $val = $exp;
-            else {
-              $unquoted = htmlspecialchars_decode ($unquoted);
+            list (, $name, $val) = $m;
+            $quote = $val[0];
+            if ($quote == "'" || $quote == '"') {
+              $unquoted = htmlspecialchars_decode (substr($val,1,-1));
               if ($quote == '"')
                 $val = "'" . str_replace ("'", "\\'", $unquoted) . "'";
               else $val = '"' . $unquoted . '"';
@@ -489,12 +500,12 @@ class HyperbladeCompiler extends BladeCompiler
         return "$indent<?php ob_start() ?>$content<?php _h\\out((new $class([$attrsAsStr],ob_get_clean(),get_defined_vars())){$mixinsList}->run(),'$indent'); ?> "; //trailing space is needed for formatting.
       }, $view);
 
-    --$ctx->nestingLevel;
+      --$ctx->nestingLevel;
 
     return $view;
   }
 
-  /**
+/**
    * Compile Blade echos into valid PHP.
    * Special care is taken with echo expressions inside component attributes. In that case, only regular echo tags are
    * supported and they are converted into a special syntax that components recognize and that they use to embed PHP
@@ -503,13 +514,18 @@ class HyperbladeCompiler extends BladeCompiler
    * @param  string $view
    * @return string
    */
-  protected function compileEchos ($view)
+  protected function compileEchos_DISABLED ($view)
   {
     // Capture all <tag attributes>content</tag> blocks on a view.
 
-    $view = preg_replace_callback ('/
+    $compile = function ($view) use (&$compile) {
+
+      $view = preg_replace_callback ('/
       < ([\w\-\:]+)                           # match and capture <tag
-      ' . self::$attributesCaptureRegEx . '   # capture the tag\'s attributes
+      (                                       # capture the tag\'s attributes
+      ' . self::$attributeCaptureRegEx . '    # match all attributes
+      )                                       # end capture
+      >                                       # match the tag closing delimiter
       (                                       # capture the tag\'s content
         (?:                                   # loop begin
           (?=<\1[\s>])                        # either another tag with the same name opens
@@ -520,7 +536,7 @@ class HyperbladeCompiler extends BladeCompiler
       )
       <\/\1>                                  # consume the closing tag
       /sx',
-      function ($match) {
+      function ($match) use ($compile) {
         // Note: $attrs has leading space.
         list (, $tag, $attrs, $content) = $match;
         list ($openRaw, $closeRaw) = $this->contentTags;
@@ -619,11 +635,14 @@ class HyperbladeCompiler extends BladeCompiler
           $attrs = " tag=\"$tag\"$attrs"; //NOTE: do not swap this statement with the next one!
           $tag = "_h:html";
         }
-        $content = $this->compileEchos ($content);
+        $content = $compile ($content);
 
         return "<$tag$attrs>$content</$tag>";
       }, $view);
 
+      return $view;
+    };
+    $view = $compile($view);
     return parent::compileEchos ($view);
   }
 
@@ -651,36 +670,36 @@ class HyperbladeCompiler extends BladeCompiler
    */
   public function isExpired ($path)
   {
+
+    return true;
+
     return isset($this->wasCompiled[$path]) ? false : parent::isExpired ($path);
   }
 
   /**
-   * Regular Expression pattern fragment for extracting attributes from a tag.
+   * Regular Expression pattern fragment for extracting one attribute from a tag.
    * Insert this after the tag name capture.
    * The host regex must have /sx options.
-   * One capture group will be added to the regex match containing all the attributes.
+   * Two capture groups will be added to the regex match containing the attribute name and valie.
    * @var string
    */
-  protected static $attributesCaptureRegEx =
-    /* Warning: DO NOT remove leading space! */
-    "(                   # capture attributes
-       (?:               # loop begin
-         \"              # either the next char is a double quote
-         [^ \"]*         # so consume everything until the next double quote (note: do not remove the space; PCRE *bug*)
-         \"
-       |                 # or
-         '               # the next char is a single quote
-         [^']*           # so consume everything until the next single quote
-         '
-       |                 # or
-         §begin          # matches an interpolator block
-         (?:             # so consume the whole expression; begin a loop
-          (?! §end).     # while the expression delimiter is not reached, capture the next char
-         )*              # repeat
-         §end
-       |                 # or
-         [^>]            # consume the next char if it is not the delimiter ending the tag head
-       )*                # repeat
-     )                   # end capture
-     >                   # consume the tag delimiter";
+  protected static $attributeCaptureRegEx =
+    ' \s*                 # match leading white space
+      ([\w\-\:]+) \s*     # capture attribute name and eventuak prefix
+      = \s*               # match = and eventual white space
+      (                   # capture attribute value
+        (?:               # switch
+          \$? \w+         # either match attribute=\$var or attribute=constant (without quotes)
+        |                 # or
+          "               # the next char is a double quote
+          [^"]*           # so consume everything until the next double quote
+          "
+        |                 # or
+          \'              # the next char is a single quote
+          [^\']*          # so consume everything until the next single quote (note: do not remove the space; PCRE *bug*)
+          \'
+        )                 # end switch
+      )                   # end capture
+      \s*                 # match trailing white space
+';
 }

@@ -107,7 +107,9 @@ class HyperbladeCompiler extends BladeCompiler
    */
   protected $wasCompiled = array();
   /**
-   * If true, the output will retain the original indentation, otherwise it will be minified.
+   * If true the output will retain the original indentation and templates are always compiled (no caching).
+   * If false, the output will discard indentation and compiled templates are cached.
+   *
    * @var bool
    */
   protected $debugMode = false;
@@ -498,8 +500,8 @@ class HyperbladeCompiler extends BladeCompiler
       function ($match) {
         list (, $indent, $prefix, $tag, $attrList, , , $content) = $match;
 
-        // The reserved predefined prefix 'html' is used to promote a simple tag to a gemeric html component.
-        // This allows mixins to be recognized.
+        // The reserved predefined prefix 'html' is used to promote a simple tag to a generic html component.
+        // This allows mixins on that tag to be recognized and applied.
         // No PHP namespace needs to be associated with this special prefix, neither is the prefix registered.
 
         if ($prefix == 'html') {
@@ -529,7 +531,7 @@ class HyperbladeCompiler extends BladeCompiler
             /sxm', $attrList, $match2, PREG_SET_ORDER
           );
 
-          // Build attributes map.
+          // Build the attributes map.
 
           foreach ($match2 as $m) {
             $m[] = null; // supply last match group if it's absent.
@@ -537,9 +539,7 @@ class HyperbladeCompiler extends BladeCompiler
             $quote = $val[0];
             if ($quote == "'" || $quote == '"') {
               $unquoted = htmlspecialchars_decode (substr ($val, 1, -1));
-              if ($quote == '"')
-                $val = "'" . str_replace ("'", "\\'", $unquoted) . "'";
-              else $val = '"' . $unquoted . '"';
+              $val = $this->compileInterpolator ($unquoted, $quote);
             }
 
             // Process attribute directives.
@@ -570,7 +570,7 @@ class HyperbladeCompiler extends BladeCompiler
         $content = $this->compileComponents ($content);
         // Avoid using output buffers if not really necessary. If the content has no PHP code, pass it to the component
         // as a simple string.
-        if (strpos ($content, '<?') === false) {
+        if (strpos ($content, '<?') === false && strpos ($content, $this->contentTags[0]) === false) {
           // Escape single quotes.
           $content = str_replace ("'", "\\'", $content);
           return "$indent<?php _h\\out((new $class([$attrsAsStr],'$content',get_defined_vars())){$mixinsList}->run(),'$indent'); ?> "; //trailing space is needed for formatting.
@@ -585,145 +585,113 @@ class HyperbladeCompiler extends BladeCompiler
   }
 
   /**
-   * Compile Blade echos into valid PHP.
-   * Special care is taken with echo expressions inside component attributes. In that case, only regular echo tags are
-   * supported and they are converted into a special syntax that components recognize and that they use to embed PHP
-   * expressions in the component instantiation.
+   * Compile an attribute value that is an interpolated expression.
    *
-   * @param  string $view
+   * Note: Static html tags do not need interpolated attribute transformations, so standard Blade output code will be
+   * generated for those interpolations.
+   * On the other hand, components with attribute interpolations must be handled differently.
+   *
+   * @param string $value A string containing interpolated expressions delimited with {{ }}.
+   *                      The attribute's value should be enclosed in double quotes.
+   * @param string $quote Either `"` or `'`.
    * @return string
    */
-  protected function compileEchos ($view)
+  protected function compileInterpolator ($value, $quote)
   {
-    return parent::compileEchos ($view);
-    // Capture all <tag attributes>content</tag> blocks on a view.
+    var_dump ("Compile: $value, quote: $quote ");
+    $open = preg_quote ($this->contentTags[0]);
+    $close = preg_quote ($this->contentTags[1]);
 
-    $compile = function ($view) use (&$compile) {
+    $value = preg_replace_callback ('/
+       ^                              # start at the beginning
+       (                              # capture the attribute value
+         (?:                          # for each mixed text and interpolator fragment
+           (?:
+             (?!' . $open . ')        # while no next interpolator opening tag
+             .                        # consume text
+           )*?                        # until interpolator opening tag, optional
+           ' . $open . '              # must have an interpolator
+           (?!' . $close . ').*?      # consume text until interpolator closing tag
+           ' . $close . '             # consume the interpolator closing tag
+           (?:                        # while
+             (?!' . $open . ')        # no next interpolator opening tag
+             .                        # consume text
+           )*?                        # repeat, optional
+         )+                           # loop (consume remaining fragments)
+       )
+       /sx',
+      function ($match) use ($open, $close, $quote) {
+        list (, $value) = $match;
+        $atl = array();
 
-      $view = preg_replace_callback ('/
-      < ([\w\-\:]+)                           # match and capture <tag
-      (                                       # capture the tag\'s attributes
-      ' . self::$attributeCaptureRegEx . '    # match all attributes
-      )                                       # end capture
-      >                                       # match the tag closing delimiter
-      (                                       # capture the tag\'s content
-        (?:                                   # loop begin
-          (?=<\1[\s>])                        # either another tag with the same name opens
-          (?R)                                # and we must recurse
-        |                                     # or
-          (?! <\/\1>).                        # consume one char until the closing tag is reached
-        )*                                    # repeat
-      )
-      <\/\1>                                  # consume the closing tag
-      /sx',
-        function ($match) use ($compile) {
-          // Note: $attrs has leading space.
-          list (, $tag, $attrs, $content) = $match;
-          list ($openRaw, $closeRaw) = $this->contentTags;
-          $open = preg_quote ($openRaw);
-          $close = preg_quote ($closeRaw);
-          /**
-           * Set to true when a simple tag must be converted to a component tag.
-           * @var boolean $convertToComponent
-           */
-          $convertToComponent = false;
+        // Create an array of literal strings or interpolated expressions. Try to make it as small as possible by
+        // merging adjacent literal strings or by inserting native PHP interpolations into literal strings.
 
-          // Tag's with prefix are already components.
-          $isComponent = Str::contains ($tag, ':');
-
-          // Simple (non prefixed) tags that contain attribute mixins must be converted to components
-          // (except for the reserved attribute xmlns).
-
-          if (!$isComponent && preg_match ('/(?:^| )(?!xmlns:)[\w\-]+:[\w\-]+\s*=/', $attrs))
-            $convertToComponent = true;
-
-          // Handle attributes with PHP constant values (ex: attr=12 attr=false).
-
-          $attrs = preg_replace ('/
-          ([\w\-\:]+) \s* = \s* (\$?\w+) # match attribute=$var or attribute=constant
-          /x',
-            "$1=\"$openRaw$2$closeRaw\"", $attrs); // Convert it to attribute="{{var_or_constant}}"
-
-          // Handle attributes with interpolators.
-
-          // Static html tags do not need interpolated attribute transformations, so standard Blade output code will be
-          // generated for those interpolations.
-          // On the other hand, components with attribute interpolations must be handled differently.
-          if ($isComponent || $convertToComponent)
-
-            $attrs = preg_replace_callback ('/
-            ([\w\-\:]+) \s* = \s* ("|\')   # match attribute="
-            (                              # capture the attribute value
-              (?:                          # for each mixed text and interpolator fragment
-                (?:
-                  (?!' . $open . ')        # while no next interpolator opening tag
-                  (?!\2)                   # and no attribute value end quote
-                  .                        # consume text
-                )*?                        # until interpolator opening tag, optional
-                ' . $open . '              # must have an interpolator
-                (?!' . $close . ').*?      # consume text until interpolator closing tag
-                ' . $close . '             # consume the interpolator closing tag
-                (?:                        # while
-                  (?!' . $open . ')        # no next interpolator opening tag
-                  (?!\2)                   # and no attribute value end quote
-                  .                        # consume text
-                )*?                        # repeat, optional
-              )+                           # loop (consume remaining fragments)
-            )
-            \2                             # match the attribute value ending quote
-            /sx',
-              function ($match) use ($open, $close) {
-                list (, $attr, , $value) = $match;
-
-                $atl = array();
-                // Create an array of literal strings or interpolated expressions. Try to make it as small as possible by
-                // merging adjacent literal strings or by inserting native PHP interpolations into literal strings.
-                preg_replace_callback ("/
+        // Return value is irrelevant.
+        preg_replace_callback ("/
                 $open \\s* (.*?) \\s* $close  # capture interpolator
                 |                             # or
                 (?:(?!$open).)+               # capture literal text
               /x",
-                  function ($match) use (&$atl) {
-                    if (!isset($match[1])) { // it's not an interpolator.
-                      $seg = str_replace (array('"', '$'), array('\\"', '\$'), $match[0]);
-                      if (empty($atl) || $atl[count ($atl) - 1][0] != '"')
-                        $atl[] = '"' . $seg . '"';
-                      else $atl[count ($atl) - 1] = substr ($atl[count ($atl) - 1], 0, -1) . $seg . '"';
-                    } else if (preg_match ('/^\$?\w+$/', $match[1])) { // if simple interpolation ($VAR)
-                      if (empty($atl)) $atl[] = '"' . $match[1] . '"';
-                      else {
-                        $e = $atl[count ($atl) - 1];
-                        if ($e[0] == '"')
-                          $atl[count ($atl) - 1] = substr ($e, 0, -1) . $match[1] . '"';
-                        else $atl[] = $match[1];
-                      }
-                    } else // complex interpolator
-                      $atl[] = '(' . $match[1] . ')';
-                  }, $value);
-                // Simplify a single expression like "$var" to $var, or (exp) to exp.
-                if (count ($atl) == 1 && preg_match ('/^"\$?\w+"$|^\(.+\)$/', $atl[0]))
-                  $atl = array(substr ($atl[0], 1, -1));
-                // At this point $atl contains items either starting with '"' (literal string), '(' (complex expressions)
-                // or '$' (variable name).
-                // Generate PHP string interpolator.
-                $value = implode ('.', $atl);
-                // Mark attribute as being interpolated, it will be handled in a special way on the component processing stage.
-                return "{$attr}=§begin{$value}§end";
-              }, $attrs);
 
-          if ($convertToComponent) {
-            $attrs = " tag=\"$tag\"$attrs"; //NOTE: do not swap this statement with the next one!
-            $tag = "_h:html";
-          }
-          $content = $compile ($content);
+          // For each interpolation segment.
 
-          return "<$tag$attrs>$content</$tag>";
-        }, $view);
+          function ($match) use (&$atl) {
+            $match[] = '';
+            list ($all, $exp) = $match;
+            /*
+                        if ($quote == '"')
+                          $val = "'" . str_replace ("'", "\\'", $unquoted) . "'";
+                        else $val = '"' . $unquoted . '"';
+              */
 
-      return $view;
-    };
-    $view = $compile($view);
-    return parent::compileEchos ($view);
+            // If it's not an interpolator, it's plain text.
+
+            if (empty($atl))
+              $last = null;
+            else $last = &$atl[count ($atl) - 1];
+            if ($exp == '') {
+              // Escape double quotes and dollars.
+              $seg = str_replace (array('"', '$'), array('\\"', '\$'), $all);
+              // It the previous segment is a string, merge this string with it (optimize).
+              if (isset($last) && $last[0] == '"')
+                $last = substr ($last, 0, -1) . $seg . '"';
+              // If this is the first segment or the last one is not a string, add this to the segment list.
+              else $atl[] = '"' . $seg . '"';
+            } /*
+                If it's a simple interpolation {{$VAR}}, transform it into a PHP string interpolation.
+            */
+            else if (preg_match ('/^\$?\w+$/', $exp)) {
+              if (!isset($last))
+                // If it's the first segment, just add it to the list.
+                $atl[] = $exp;
+              else {
+                // If the previous segment is a string, merge this one with it.
+                if ($last[0] == '"')
+                  $last = substr ($last, 0, -1) . $exp . '"';
+                // The previous segment is not a string, so just append this one the list.
+                else $atl[] = $exp;
+              }
+            } /*
+              Otherwise, it's a complex expression, so enclose it in quotes.
+            */
+            else $atl[] = '(' . $exp . ')';
+          }, $value);
+
+        var_dump ("Before: ", $atl);
+        // Simplify a single expression like "$var" to $var, or (exp) to exp.
+        if (count ($atl) == 1 && preg_match ('/^"\$?\w+"$|^\(.+\)$/', $atl[0]))
+          $atl = array(substr ($atl[0], 1, -1));
+        // At this point $atl contains items either starting with '"' (literal string), '(' (complex expressions)
+        // or '$' (variable name).
+        // Generate PHP string interpolator.
+        $value = implode ('.', $atl);
+        // Mark attribute as being interpolated, it will be handled in a special way on the component processing stage.
+        return $value;
+      }, $value);
+    var_dump ("CHANGED TO:\n$value\n");
+    echo "<hr>";
+    return $value;
   }
 
   /**
@@ -745,15 +713,14 @@ class HyperbladeCompiler extends BladeCompiler
    * avoiding redundant template compilations when the same component is rendered multiple times in the same view,
    * due to the time granularity limitations of the operating system's file system's modification timestamps.
    *
+   * Also, when running in debug mode, templates are always expired.
+   *
    * @param  string $path
    * @return bool
    */
   public function isExpired ($path)
   {
-
-    return true;
-
-    return isset($this->wasCompiled[$path]) ? false : parent::isExpired ($path);
+    return $this->debugMode ?: (isset($this->wasCompiled[$path]) ? false : parent::isExpired ($path));
   }
 
 }

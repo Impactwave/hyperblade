@@ -110,7 +110,8 @@ class CompilationContext
     $key = strtolower (str_replace ('-', '', $alias));
     if (!isset($this->ns[$key])) {
       $alias = $alias ? "Alias '$alias'" : "The default alias";
-      throw new RuntimeException("$alias is not bound to a class/namespace.");
+      throw new RuntimeException("$alias is not bound to a class/namespace.\n\nCurrently registered alias: " .
+        implode (",", array_keys ($this->ns)));
     }
     return $key;
   }
@@ -124,7 +125,8 @@ class CompilationContext
   {
     $key = $this->getNormalizedAlias ($alias);
     if (!isset($this->ns[$key]))
-      throw new RuntimeException("Alias '$alias' is not bound to a namespace.");
+      throw new RuntimeException("Alias '$alias' is not bound to a namespace.\n\nCurrently registered alias: " .
+        implode (",", array_keys ($this->ns)));
     return $this->ns[$key];
   }
 
@@ -141,7 +143,7 @@ class CompilationContext
     if (!class_exists ("$namespace\\$class"))
       throw new RuntimeException("Class '$namespace\\$class' was not found for <$prefix:$name>.");
     // Perform dash-case to camel-case conversion. Do NOT use Str::camel !
-    $prefix = lcfirst(str_replace(' ', '', ucwords(str_replace('-', ' ', $prefix))));
+    $prefix = lcfirst (str_replace (' ', '', ucwords (str_replace ('-', ' ', $prefix))));
     return "$prefix\\$class";
   }
 

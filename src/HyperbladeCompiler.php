@@ -70,6 +70,33 @@ function e ($o)
 class HyperbladeCompiler extends BladeCompiler
 {
   /**
+   * Regular Expression pattern fragment for extracting one attribute from a tag.
+   * Insert this after the tag name capture.
+   * The host regex must have /sx options.
+   * Two capture groups will be added to the regex match containing the attribute name and valie.
+   * @var string
+   */
+  protected static $attributeCaptureRegEx =
+    ' \s*                 # match leading white space
+      ([\w\-\:]+) \s*     # capture attribute name and eventuak prefix
+      = \s*               # match = and eventual white space
+      (                   # capture attribute value
+        (?:               # switch
+          \$? \w+         # either match attribute=\$var or attribute=constant (without quotes)
+        |                 # or
+          "               # the next char is a double quote
+          [^"]*           # so consume everything until the next double quote
+          "
+        |                 # or
+          \'              # the next char is a single quote
+          [^\']*          # so consume everything until the next single quote (note: do not remove the space; PCRE *bug*)
+          \'
+        )                 # end switch
+      )                   # end capture
+      \s*                 # match trailing white space
+';
+
+  /**
    * The current compilation context.
    * @var CompilationContext
    */
@@ -79,22 +106,41 @@ class HyperbladeCompiler extends BladeCompiler
    * @var array Map of string => boolean.
    */
   protected $wasCompiled = array();
+  /**
+   * If true, the output will retain the original indentation, otherwise it will be minified.
+   * @var bool
+   */
+  protected $debugMode = false;
 
   /**
    * Create a new compiler instance.
    *
-   * @param  Filesystem $files
-   * @param  string $cachePath
+   * @param Filesystem $files
+   * @param string $cachePath
+   * @param bool $debugMode If true, the output will retain the original indentation, otherwise it will be minified.
    */
-  public function __construct (Filesystem $files, $cachePath)
+  public function __construct (Filesystem $files, $cachePath, $debugMode = false)
   {
     parent::__construct ($files, $cachePath);
-    array_unshift ($this->compilers, 'HyperbladeDirectives');
+    $this->debugMode = $debugMode;
+    $this->compilers = array_merge (
+      [
+        'Uses',
+        'Namespaces',
+        'Components',
+      ],
+      $this->compilers,
+      [
+        'ConfigBlocks',
+        'ContentInjectors',
+        'SimpleMacros',
+        'BlockMacros',
+      ]);
     $this->setEchoFormat ('_h\e(%s)');
   }
 
   /**
-   * Compile the view at the given path.
+   * Compiles the view at the given path.
    *
    * @param  string $path
    */
@@ -107,7 +153,9 @@ class HyperbladeCompiler extends BladeCompiler
   }
 
   /**
-   * Compile the given Hyperblade template contents.
+   * Compiles the given string template.
+   * This is also called by compile().
+   * Note that this method my perform multiple compilation passes, one for each PHP block on the string.
    *
    * @param  string $view
    * @return string
@@ -119,167 +167,175 @@ class HyperbladeCompiler extends BladeCompiler
     return $this->ctx->postProcess ($out);
   }
 
-  public function compileHyperbladeDirectives ($view)
-  {
-    return $this->compileSegment ($view);
-  }
-
   /**
-   * Compiles a segment of a view template.
+   * Compiles &#64;use directives.
    *
-   * Note: a view template can be split into multiple segments when there is embedded PHP code in the template.
-   * If there is no embedded code, there is a single segment that encompasses the full template.
+   * Imports a class or namespace into the current view.
    *
-   * @param string $segment
-   * @param string $viewPath
-   * @return string The compiled block.
-   */
-  public function compileSegment ($segment)
-  {
-    $ctx = $this->ctx;
-    $out = $this->compileBlock ($segment, $ctx);
-    return $out;
-  }
-
-  /**
-   * Compiles the given string.
-   * This method may call itself recursively.
+   * Syntax:
    *
-   * Note: a block can be a segment or it can be the generated output from a component.
+   *       &#64;use(FQN[ as alias])
+   *
+   * Ex:
+   *
+   *       &#64;use (my\neat\Util as util)
+   *
+   * `FQN` (Fully Qualified Name) is a fully qualified class name or a namespace; it is case insensitive and it can
+   * be dash-cased (it will be converted to camel case internally).
+   *
+   * ex: `my\namespace`, `my\namespace\myClass` or just `myClass`.
+   *
+   * If no alias is specified, the default nameless alias will be set.
    *
    * @param string $view
-   * @param CompilationContext $ctx A context that can be reused between recursive calls and consecutive blocks.
-   * @return string The compiled template.
+   * @return string
    */
-  public function compileBlock ($view, CompilationContext $ctx)
+  protected function compileUses ($view)
   {
-    ++$ctx->nestingLevel;
-
-    /*
-     * @use directive.
-     * Imports a class or namespace into the current view.
-     *
-     *   Syntax: @use(FQN[ as alias])
-     *
-     *   Ex: @use (my\neat\Util as util)
-     *
-     * `FQN` (Fully Qualified Name) is a fully qualified class name or a namespace; it is case insensitive and it can
-     * be dash-cased (it will be converted to camel case internally).
-     * ex: `my\namespace`, `my\namespace\myClass` or just `myClass`.
-     * If no alias is specified, the default nameless alias will be set.
-     */
-
-    $view = preg_replace_callback ('/(?<!\w)(\s*)@use\s*\(\s*(\S+)\s*(?:as\s*([\w\-]+)\s*)?\)\s*$/m',
-      function ($match) use ($ctx) {
+    return preg_replace_callback ('/(?<!\w)(\s*)@use\s*\(\s*(\S+)\s*(?:as\s*([\w\-]+)\s*)?\)\s*$/m',
+      function ($match) {
         $match[] = ''; // the default namespace.
         list (, $space, $FQN, $alias) = $match;
-        $ctx->registerNamespace ($alias, $FQN);
+        $this->ctx->registerNamespace ($alias, $FQN);
         if ($alias) {
-          $alias = $ctx->getNormalizedPrefix ($alias);
-          $ctx->prolog[] = "use $FQN as $alias;";
+          $alias = $this->ctx->getNormalizedPrefix ($alias);
+          $this->ctx->prolog[] = "use $FQN as $alias;";
         }
         return $space;
       }, $view);
+  }
 
-    /*
-     * Namespace declarations bind a XML prefix to a PHP namespace. They are quivalent to @use directives.
-     * They can be an attribute of any tag in the template, but they also may appear in comments (or even strings,
-     * so beware!).
-     *
-     * Syntax:
-     *
-     *   <sometag ... xmlns:prefix="namespace" ...>
-     *
-     * Ex:
-     *
-     *   <div xmlns:form="ns1\ns2\forms">
-     *
-     *   is equivalent to:
-     *
-     *   @use (ns1\ns2\forms as form)
-     *
-     * `prefix` can be dash-cased and it is case insensitive.
-     */
-
-    $view = preg_replace_callback ('/ \b xmlns:([\w\-]+) \s* = \s* (["\']) (.*?) \\2 \s* /x',
-      function ($match) use ($ctx) {
+  /**
+   * Compiles XML namespace declarations.
+   *
+   * Namespace declarations bind a XML prefix to a PHP namespace. They are equivalent to &#64;use directives.
+   * They can be an attribute of any tag in the template, but they also may appear in comments (or even strings,
+   * so beware!).
+   *
+   * Syntax:
+   *
+   *       &lt;sometag ... xmlns:prefix="namespace" ...>
+   *
+   * Ex:
+   *
+   *       &lt;div xmlns:form="ns1\ns2\forms">
+   *
+   *   is equivalent to:
+   *
+   *       &#64;use (ns1\ns2\forms as form)
+   *
+   * `prefix` can be dash-cased and it is case insensitive.
+   *
+   * @param string $view
+   * @return string
+   */
+  protected function compileNamespaces ($view)
+  {
+    return preg_replace_callback ('/ \b xmlns:([\w\-]+) \s* = \s* (["\']) (.*?) \\2 \s* /x',
+      function ($match) {
         list (, $prefix, , $namespace) = $match;
-        $ctx->registerNamespace ($prefix, $namespace);
+        $this->ctx->registerNamespace ($prefix, $namespace);
         $prefix = Str::camel ($prefix);
-        $ctx->prolog[] = "use $namespace as $prefix;";
+        $this->ctx->prolog[] = "use $namespace as $prefix;";
         return ''; //suppress attribute
       }, $view);
+  }
 
-    /*
-     * Configuration blocks allow setting values in the component's scope directly from the view template.
-     * These blocks can be used to configure the component's dynamically generated content, which usually is inserted
-     * with the @content directive.
-     *
-     * Syntax:
-     *
-     *   @config
-     *     property: value
-     *     property: value
-     *     ...
-     *   @endconfig
-     *
-     * `value` is a PHP expression.
-     */
-
-    $view = preg_replace_callback ('/@config\s*^(.*?)^\s*@endconfig\s*/sm',
-      function ($match) use ($ctx) {
+  /**
+   * Compiles &#64;config directives.
+   *
+   * Configuration blocks allow setting values in the component's scope directly from the view template.
+   * These blocks can be used to configure the component's dynamically generated content, which usually is inserted
+   * with the &#64;content directive.
+   *
+   * Syntax:
+   *
+   *       &#64;config
+   *         property: value
+   *         property: value
+   *         ...
+   *       &#64;endconfig
+   *
+   * `value` is a PHP expression.
+   *
+   * @param string $view
+   * @return string
+   */
+  protected function compileConfigBlocks ($view)
+  {
+    return preg_replace_callback ('/@config\s*^(.*?)^\s*@endconfig\s*/sm',
+      function ($match) {
         list (, $content) = $match;
         $content = substr (preg_replace ('/^(\s*)(\S+?):(\s*)(\S+)\s*$/m', '$1\'$2\'=>$3$4,', $content), 0, -1);
-        $ctx->prolog[] = "\$my->config(array(\n$content\n));";
+        $this->ctx->prolog[] = "\$my->config(array(\n$content\n));";
         return ''; //suppress directive
       }, $view);
+  }
 
-    /*
-     * Inserts at its location the component's dynamically generated content.
-     * If no content is generated, the component instance's content will be used.
-     *
-     * Syntax:
-     *
-     *   @content
-     */
-
-    $view = preg_replace_callback ($this->createPlainMatcher ('content'),
-      function ($match) use ($ctx) {
+  /**
+   * Compiles &#64;content directives.
+   *
+   * This directive inserts at its location the component's dynamically generated content.
+   * If no content is generated, the component instance's content will be used.
+   *
+   * Syntax:
+   *
+   *       &#64;content
+   *
+   * @param string $view
+   * @return string
+   */
+  protected function compileContentInjectors ($view)
+  {
+    return preg_replace_callback ($this->createPlainMatcher ('content'),
+      function ($match) {
         list (, $leadSpace, $trailSpace) = $match;
         return "$leadSpace<?php echo \$my->getContent() ?>$trailSpace";
       }, $view);
+  }
 
-    /*
-     * Simple macros invoke a static method on a class and output its result.
-     *
-     *   Syntax: @@[classAlias.]method [(args)]
-     *
-     * Generated code (simplified):
-     *
-     *   classAlias::method (args)
-     *
-     * Arguments and parenthesis are optional; ex: @@a-b instead of @@a-b()
-     * `classAlias` must have been previously bound to a class using @use.
-     * If an alias is not specified, the default nameless alias is assumed.
-     */
+  /**
+   * Compiles simple macros.
+   *
+   * Simple macros invoke a static method on a class and output its result.
+   *
+   * Syntax:
+   *
+   *       &#64;&#64;[classAlias.]method [(args)]
+   *
+   * Generated code (simplified):
+   *
+   *       classAlias::method (args)
+   *
+   * Arguments and parenthesis are optional; ex: &#64;&#64;a.b instead of &#64;&#64;a.b()
+   *
+   * `classAlias` must have been previously bound to a class using &#64;use.
+   *
+   * If an alias is not specified, the default nameless alias is assumed.
+   *
+   * @param string $view
+   * @return string
+   */
 
-    $allends = sprintf ($ctx->MACRO_END, '(?:[\w\-]+' . $ctx->MACRO_ALIAS_DELIMITER . ')?', '(?:[\w\-]+)');
+  protected function compileSimpleMacros ($view)
+  {
+    $allends = sprintf ($this->ctx->MACRO_END, '(?:[\w\-]+' . $this->ctx->MACRO_ALIAS_DELIMITER . ')?', '(?:[\w\-]+)');
 
-    $view = preg_replace_callback ('/
+    return preg_replace_callback ('/
         (?<! \w)                                              # make sure the macro prefix is not inside a text string
         (\s*)                                                 # capture leading white space
-        ' . $ctx->MACRO_PREFIX . '                            # macro begins
+        ' . $this->ctx->MACRO_PREFIX . '                      # macro begins
         (?! ' . $allends . ')                                 # do not match end tags
-        ([\w\-]+' . $ctx->MACRO_ALIAS_DELIMITER . ')?         # capture optional alias
+        ([\w\-]+' . $this->ctx->MACRO_ALIAS_DELIMITER . ')?   # capture optional alias
         ([\w\-]+)                                             # capture macro method
         (?= \( | \s )                                         # force capture full word
         (?:
           \s*\((.*?)\)                                        # capture optional arguments block
         )?
-        (?! \s*' . $ctx->MACRO_BEGIN . ')                     # do not match macros with a content block
+        (?! \s*' . $this->ctx->MACRO_BEGIN . ')               # do not match macros with a content block
         (?! \s*\( )                                           # must not have skipped the arguments list
         /sxm',
-      function ($match) use ($ctx) {
+      function ($match) {
         array_push ($match, ''); // allow $args to be undefined.
         list ($all, $space, $alias, $method, $args) = $match;
 
@@ -287,56 +343,66 @@ class HyperbladeCompiler extends BladeCompiler
         $indent = isset($m[1]) ? $m[1] : '';
 
         if ($alias)
-          $alias = substr ($alias, 0, -strlen ($ctx->MACRO_ALIAS_DELIMITER));
+          $alias = substr ($alias, 0, -strlen ($this->ctx->MACRO_ALIAS_DELIMITER));
         $method = Str::camel ($method);
-        $class = $ctx->getNormalizedPrefix ($alias);
+        $class = $this->ctx->getNormalizedPrefix ($alias);
 
         $c = substr_count ($args, ',');
-        $realClass = $ctx->getNamespace ($alias);
+        $realClass = $this->ctx->getNamespace ($alias);
         $info = new \ReflectionMethod($realClass, $method);
         $r = $info->getNumberOfRequiredParameters ();
         if ($c < $r)
           throw new RuntimeException ("Error on macro call: $all\n\nThe corresponding method $realClass::$method must have at least $r arguments, this call generates $c arguments.\nPlease check the method/call signatures.");
 
-        if (!$class) $class = $ctx->getNamespace ('');
+        if (!$class) $class = $this->ctx->getNamespace ('');
         return "$space<?php _h\\out($class::$method($args),'$indent') ?> "; //trailing space is needed for formatting.
       }, $view);
+  }
 
-    /*
-     * Block macros invoke a static method on a class and output its result, and they also support a block of content
-     * and source code indentation.
-     *
-     * Syntax:
-     *
-     *   @@[classAlias.]method [(args)]:
-     *     html markup
-     *   @@end[alias.]method
-     *
-     * Generated code (simplified):
-     *
-     *   classAlias::method (html,args...)
-     *
-     * Arguments and parenthesis are optional; ex: @@a:b instead of @@a:b()
-     * `alias` must have been previously bound to a class using @use.
-     * If an alias is not specified, the default alias/namespace is assumed.
-    */
+  /**
+   * Compiles block macros.
+   *
+   * Block macros invoke a static method on a class and output its result, and they also support a block of content
+   * and source code indentation.
+   *
+   * Syntax:
+   *
+   *       &#64;&#64;[classAlias.]method [(args)]:
+   *         html markup
+   *       &#64;&#64;end[alias.]method
+   *
+   * Generated code (simplified):
+   *
+   *       classAlias::method (html,args...)
+   *
+   * Arguments and parenthesis are optional; ex: &#64;&#64;a.b instead of &#64;&#64;a.b()
+   *
+   * `alias` must have been previously bound to a class using &#64;use.
+   *
+   * If an alias is not specified, the default alias/namespace is assumed.
+   *
+   * @param string $view
+   * @return string
+   */
 
-    $end = $ctx->MACRO_PREFIX . sprintf ($ctx->MACRO_END, '\3', '\4');
+  protected function compileBlockMacros ($view)
+  {
+    $end = $this->ctx->MACRO_PREFIX . sprintf ($this->ctx->MACRO_END, '\3', '\4');
 
-    $view = preg_replace_callback ('/
+    return preg_replace_callback ('/
         (?<! \w)                                              # make sure the macro prefix is not inside a text string
         (\s*)                                                 # capture leading white space
-        ' . $ctx->MACRO_PREFIX . '                            # macro begins
-        ([\w\-]+' . $ctx->MACRO_ALIAS_DELIMITER . ')?         # capture optional alias
+        ' . $this->ctx->MACRO_PREFIX . '                      # macro begins
+        ([\w\-]+' . $this->ctx->MACRO_ALIAS_DELIMITER . ')?   # capture optional alias
         ([\w\-]+)                                             # capture macro method
         (?:
           \s*\((.*?)\)                                        # capture optional arguments block
         )?
-        \s* ' . $ctx->MACRO_BEGIN . '                         # only match macros with a content block
+        \s* ' . $this->ctx->MACRO_BEGIN . '                   # only match macros with a content block
         \s*                                                   # supress leading white space on the content
         (                                                     # capture macro content
           (?:                                                 # loop begin
-            (?=' . $ctx->MACRO_PREFIX . '\2\3)                # either the same tag is opened again
+            (?=' . $this->ctx->MACRO_PREFIX . '\2\3)          # either the same tag is opened again
             (?R)                                              # and we must recurse
           |                                                   # or
             (?! ' . $end . ').                                # consume one char until the closing tag is reached
@@ -344,21 +410,21 @@ class HyperbladeCompiler extends BladeCompiler
         )
         ' . $end . '                                          # match the macro end tag
         /sxm',
-      function ($match) use ($ctx) {
-      list ($all, $space, $alias, $method, $args, $content) = $match;
+      function ($match) {
+        list ($all, $space, $alias, $method, $args, $content) = $match;
         preg_match ('/[\n\r]([ \t]*)$/', $space, $m);
 
         $indent = isset($m[1]) ? $m[1] : '';
-        $alias = substr ($alias, 0, -strlen ($ctx->MACRO_ALIAS_DELIMITER));
+        $alias = substr ($alias, 0, -strlen ($this->ctx->MACRO_ALIAS_DELIMITER));
 
         $method = Str::camel ($method);
-        $class = $ctx->getNormalizedPrefix ($alias);
+        $class = $this->ctx->getNormalizedPrefix ($alias);
         if ($args != '')
           $args = ",$args";
-        $content = $this->compileBlock (rtrim ($content), $ctx);
+        $content = $this->compileBlock (rtrim ($content), $this->ctx);
 
         $c = 1 + substr_count ($args, ',');
-        $realClass = $ctx->getNamespace ($alias);
+        $realClass = $this->ctx->getNamespace ($alias);
         $info = new \ReflectionMethod($realClass, $method);
         $r = $info->getNumberOfRequiredParameters ();
         if ($c < $r)
@@ -370,33 +436,46 @@ class HyperbladeCompiler extends BladeCompiler
         }
         return "$space<?php ob_start() ?>$content<?php _h\\out($class::$method(ob_get_clean()$args),'$indent') ?> "; //trailing space is needed for formatting.
       }, $view);
+  }
 
-    /*
-     * Hyperblade components transform tags and their contents into something else.
-     *
-     * Syntax:
-     *
-     *   <prefix:class [attr1="", ...]>html markup</prefix:class>
-     *
-     * Ex:
-     *
-     *   <form:super-field name="field1" my:super-mixin="test">
-     *     <input type="text">
-     *   </form:super-field>
-     *
-     *   will be compiled to (simplified example):
-     *
-     *   (new namespace\SuperField(['name'=>'field1'], '<input type="text">', array scopeVars))->mixin(new my\SuperMixin('test'))->render();
-     *
-     * Creates a new instance of a namespace\class where:
-     *   - `namespace` is a previously registered namespace for the given `prefix` (via xmlns or @use declarations).
-     *   - `class` is a class name written in dash-case.
-     *   - `scopeVars` are all the variables accesible in the calling PHP scope.
-     *
-     * If you want automatic support for converting attributes to class properties and other advanced functionality,
-     * your class should subclass `contentwave\hyperblade\Component`.
-     * `prefix` can be dash-cased.
-     */
+  /**
+   * Compiles components.
+   *
+   * Hyperblade components transform tags and their contents into something else.
+   *
+   * Syntax:
+   *
+   *       &lt;prefix:class [attr1="", ...]>html markup&lt;/prefix:class>
+   *
+   * Ex:
+   *
+   *       &lt;form:super-field name="field1" my:super-mixin="test">
+   *         &lt;input type="text">
+   *       &lt;/form:super-field>
+   *
+   *   will be compiled to (simplified example):
+   *
+   *       (new namespace\SuperField(['name'=>'field1'], '&lt;input type="text">', array scopeVars))->mixin(new my\SuperMixin('test'))->render();
+   *
+   *   this will create a new instance of a namespace\class where:
+   *     - `namespace` is a previously registered namespace for the given `prefix` (via xmlns or &#64;use declarations).
+   *     - `class` is a class name written in dash-case.
+   *     - `scopeVars` are all the variables accesible in the calling PHP scope.
+   *
+   * Note: if you want automatic support for converting attributes to class properties and other advanced functionality,
+   * your class should subclass `contentwave\hyperblade\Component`.
+   *
+   * Note: `prefix` can be dash-cased.
+   *
+   * Note: This method may call itself recursively to process the generated output from a component.
+   *
+   * @param string $view
+   * @return string The compiled template.
+   */
+  public function compileComponents ($view)
+  {
+    ++$this->ctx->nestingLevel;
+
     $view = preg_replace_callback ('/
         (^\s*)?                                 # capture white space from the beginning of the line
         < ([\w\-]+) : ([\w\-]+)                 # match and capture <prefix:tag
@@ -416,8 +495,8 @@ class HyperbladeCompiler extends BladeCompiler
         )
         <\/\2:\3>                               # consume the closing tag
       /smx',
-      function ($match) use ($ctx) {
-      list (, $indent, $prefix, $tag, $attrList, , , $content) = $match;
+      function ($match) {
+        list (, $indent, $prefix, $tag, $attrList, , , $content) = $match;
 
         // The reserved predefined prefix 'html' is used to promote a simple tag to a gemeric html component.
         // This allows mixins to be recognized.
@@ -431,8 +510,8 @@ class HyperbladeCompiler extends BladeCompiler
 
         // Find the component implementation.
 
-        $class = $ctx->getClass ($prefix, $tag);
-        $realClass = $ctx->getFQClass ($prefix, $tag);
+        $class = $this->ctx->getClass ($prefix, $tag);
+        $realClass = $this->ctx->getFQClass ($prefix, $tag);
         $info = new \ReflectionMethod($realClass, '__construct');
         if ($info->getNumberOfParameters () != 3)
           throw new RuntimeException ("Component class $realClass's constructor must have 3 arguments.");
@@ -457,7 +536,7 @@ class HyperbladeCompiler extends BladeCompiler
             list (, $name, $val) = $m;
             $quote = $val[0];
             if ($quote == "'" || $quote == '"') {
-              $unquoted = htmlspecialchars_decode (substr($val,1,-1));
+              $unquoted = htmlspecialchars_decode (substr ($val, 1, -1));
               if ($quote == '"')
                 $val = "'" . str_replace ("'", "\\'", $unquoted) . "'";
               else $val = '"' . $unquoted . '"';
@@ -469,7 +548,7 @@ class HyperbladeCompiler extends BladeCompiler
             $s = explode (':', $name, 2);
             if (count ($s) == 2) {
               list ($prefix, $name) = $s;
-              $mixinClass = $ctx->getClass ($prefix, $name);
+              $mixinClass = $this->ctx->getClass ($prefix, $name);
               $mixins[] = "new $mixinClass($val)";
             } /*
                If it's not a directive attribute, store it on the attributes map.
@@ -488,7 +567,7 @@ class HyperbladeCompiler extends BladeCompiler
         // Unindent the tag's content, subtracting from it the tag's indentation level.
         $content = preg_replace ("/^$indent/m", '', $content);
         // Recursively compile the content.
-        $content = $this->compileBlock ($content, $ctx);
+        $content = $this->compileComponents ($content);
         // Avoid using output buffers if not really necessary. If the content has no PHP code, pass it to the component
         // as a simple string.
         if (strpos ($content, '<?') === false) {
@@ -500,12 +579,12 @@ class HyperbladeCompiler extends BladeCompiler
         return "$indent<?php ob_start() ?>$content<?php _h\\out((new $class([$attrsAsStr],ob_get_clean(),get_defined_vars())){$mixinsList}->run(),'$indent'); ?> "; //trailing space is needed for formatting.
       }, $view);
 
-      --$ctx->nestingLevel;
+    --$this->ctx->nestingLevel;
 
     return $view;
   }
 
-/**
+  /**
    * Compile Blade echos into valid PHP.
    * Special care is taken with echo expressions inside component attributes. In that case, only regular echo tags are
    * supported and they are converted into a special syntax that components recognize and that they use to embed PHP
@@ -514,8 +593,9 @@ class HyperbladeCompiler extends BladeCompiler
    * @param  string $view
    * @return string
    */
-  protected function compileEchos_DISABLED ($view)
+  protected function compileEchos ($view)
   {
+    return parent::compileEchos ($view);
     // Capture all <tag attributes>content</tag> blocks on a view.
 
     $compile = function ($view) use (&$compile) {
@@ -536,42 +616,42 @@ class HyperbladeCompiler extends BladeCompiler
       )
       <\/\1>                                  # consume the closing tag
       /sx',
-      function ($match) use ($compile) {
-        // Note: $attrs has leading space.
-        list (, $tag, $attrs, $content) = $match;
-        list ($openRaw, $closeRaw) = $this->contentTags;
-        $open = preg_quote ($openRaw);
-        $close = preg_quote ($closeRaw);
-        /**
-         * Set to true when a simple tag must be converted to a component tag.
-         * @var boolean $convertToComponent
-         */
-        $convertToComponent = false;
+        function ($match) use ($compile) {
+          // Note: $attrs has leading space.
+          list (, $tag, $attrs, $content) = $match;
+          list ($openRaw, $closeRaw) = $this->contentTags;
+          $open = preg_quote ($openRaw);
+          $close = preg_quote ($closeRaw);
+          /**
+           * Set to true when a simple tag must be converted to a component tag.
+           * @var boolean $convertToComponent
+           */
+          $convertToComponent = false;
 
-        // Tag's with prefix are already components.
-        $isComponent = Str::contains ($tag, ':');
+          // Tag's with prefix are already components.
+          $isComponent = Str::contains ($tag, ':');
 
-        // Simple (non prefixed) tags that contain attribute mixins must be converted to components
-        // (except for the reserved attribute xmlns).
+          // Simple (non prefixed) tags that contain attribute mixins must be converted to components
+          // (except for the reserved attribute xmlns).
 
-        if (!$isComponent && preg_match ('/(?:^| )(?!xmlns:)[\w\-]+:[\w\-]+\s*=/', $attrs))
-          $convertToComponent = true;
+          if (!$isComponent && preg_match ('/(?:^| )(?!xmlns:)[\w\-]+:[\w\-]+\s*=/', $attrs))
+            $convertToComponent = true;
 
-        // Handle attributes with PHP constant values (ex: attr=12 attr=false).
+          // Handle attributes with PHP constant values (ex: attr=12 attr=false).
 
-        $attrs = preg_replace ('/
+          $attrs = preg_replace ('/
           ([\w\-\:]+) \s* = \s* (\$?\w+) # match attribute=$var or attribute=constant
           /x',
-          "$1=\"$openRaw$2$closeRaw\"", $attrs); // Convert it to attribute="{{var_or_constant}}"
+            "$1=\"$openRaw$2$closeRaw\"", $attrs); // Convert it to attribute="{{var_or_constant}}"
 
-        // Handle attributes with interpolators.
+          // Handle attributes with interpolators.
 
-        // Static html tags do not need interpolated attribute transformations, so standard Blade output code will be
-        // generated for those interpolations.
-        // On the other hand, components with attribute interpolations must be handled differently.
-        if ($isComponent || $convertToComponent)
+          // Static html tags do not need interpolated attribute transformations, so standard Blade output code will be
+          // generated for those interpolations.
+          // On the other hand, components with attribute interpolations must be handled differently.
+          if ($isComponent || $convertToComponent)
 
-          $attrs = preg_replace_callback ('/
+            $attrs = preg_replace_callback ('/
             ([\w\-\:]+) \s* = \s* ("|\')   # match attribute="
             (                              # capture the attribute value
               (?:                          # for each mixed text and interpolator fragment
@@ -592,53 +672,53 @@ class HyperbladeCompiler extends BladeCompiler
             )
             \2                             # match the attribute value ending quote
             /sx',
-            function ($match) use ($open, $close) {
-              list (, $attr, , $value) = $match;
+              function ($match) use ($open, $close) {
+                list (, $attr, , $value) = $match;
 
-              $atl = array();
-              // Create an array of literal strings or interpolated expressions. Try to make it as small as possible by
-              // merging adjacent literal strings or by inserting native PHP interpolations into literal strings.
-              preg_replace_callback ("/
+                $atl = array();
+                // Create an array of literal strings or interpolated expressions. Try to make it as small as possible by
+                // merging adjacent literal strings or by inserting native PHP interpolations into literal strings.
+                preg_replace_callback ("/
                 $open \\s* (.*?) \\s* $close  # capture interpolator
                 |                             # or
                 (?:(?!$open).)+               # capture literal text
               /x",
-                function ($match) use (&$atl) {
-                  if (!isset($match[1])) { // it's not an interpolator.
-                    $seg = str_replace (array('"', '$'), array('\\"', '\$'), $match[0]);
-                    if (empty($atl) || $atl[count ($atl) - 1][0] != '"')
-                      $atl[] = '"' . $seg . '"';
-                    else $atl[count ($atl) - 1] = substr ($atl[count ($atl) - 1], 0, -1) . $seg . '"';
-                  } else if (preg_match ('/^\$?\w+$/', $match[1])) { // if simple interpolation ($VAR)
-                    if (empty($atl)) $atl[] = '"' . $match[1] . '"';
-                    else {
-                      $e = $atl[count ($atl) - 1];
-                      if ($e[0] == '"')
-                        $atl[count ($atl) - 1] = substr ($e, 0, -1) . $match[1] . '"';
-                      else $atl[] = $match[1];
-                    }
-                  } else // complex interpolator
-                    $atl[] = '(' . $match[1] . ')';
-                }, $value);
-              // Simplify a single expression like "$var" to $var, or (exp) to exp.
-              if (count ($atl) == 1 && preg_match ('/^"\$?\w+"$|^\(.+\)$/', $atl[0]))
-                $atl = array(substr ($atl[0], 1, -1));
-              // At this point $atl contains items either starting with '"' (literal string), '(' (complex expressions)
-              // or '$' (variable name).
-              // Generate PHP string interpolator.
-              $value = implode ('.', $atl);
-              // Mark attribute as being interpolated, it will be handled in a special way on the component processing stage.
-              return "{$attr}=§begin{$value}§end";
-            }, $attrs);
+                  function ($match) use (&$atl) {
+                    if (!isset($match[1])) { // it's not an interpolator.
+                      $seg = str_replace (array('"', '$'), array('\\"', '\$'), $match[0]);
+                      if (empty($atl) || $atl[count ($atl) - 1][0] != '"')
+                        $atl[] = '"' . $seg . '"';
+                      else $atl[count ($atl) - 1] = substr ($atl[count ($atl) - 1], 0, -1) . $seg . '"';
+                    } else if (preg_match ('/^\$?\w+$/', $match[1])) { // if simple interpolation ($VAR)
+                      if (empty($atl)) $atl[] = '"' . $match[1] . '"';
+                      else {
+                        $e = $atl[count ($atl) - 1];
+                        if ($e[0] == '"')
+                          $atl[count ($atl) - 1] = substr ($e, 0, -1) . $match[1] . '"';
+                        else $atl[] = $match[1];
+                      }
+                    } else // complex interpolator
+                      $atl[] = '(' . $match[1] . ')';
+                  }, $value);
+                // Simplify a single expression like "$var" to $var, or (exp) to exp.
+                if (count ($atl) == 1 && preg_match ('/^"\$?\w+"$|^\(.+\)$/', $atl[0]))
+                  $atl = array(substr ($atl[0], 1, -1));
+                // At this point $atl contains items either starting with '"' (literal string), '(' (complex expressions)
+                // or '$' (variable name).
+                // Generate PHP string interpolator.
+                $value = implode ('.', $atl);
+                // Mark attribute as being interpolated, it will be handled in a special way on the component processing stage.
+                return "{$attr}=§begin{$value}§end";
+              }, $attrs);
 
-        if ($convertToComponent) {
-          $attrs = " tag=\"$tag\"$attrs"; //NOTE: do not swap this statement with the next one!
-          $tag = "_h:html";
-        }
-        $content = $compile ($content);
+          if ($convertToComponent) {
+            $attrs = " tag=\"$tag\"$attrs"; //NOTE: do not swap this statement with the next one!
+            $tag = "_h:html";
+          }
+          $content = $compile ($content);
 
-        return "<$tag$attrs>$content</$tag>";
-      }, $view);
+          return "<$tag$attrs>$content</$tag>";
+        }, $view);
 
       return $view;
     };
@@ -676,30 +756,4 @@ class HyperbladeCompiler extends BladeCompiler
     return isset($this->wasCompiled[$path]) ? false : parent::isExpired ($path);
   }
 
-  /**
-   * Regular Expression pattern fragment for extracting one attribute from a tag.
-   * Insert this after the tag name capture.
-   * The host regex must have /sx options.
-   * Two capture groups will be added to the regex match containing the attribute name and valie.
-   * @var string
-   */
-  protected static $attributeCaptureRegEx =
-    ' \s*                 # match leading white space
-      ([\w\-\:]+) \s*     # capture attribute name and eventuak prefix
-      = \s*               # match = and eventual white space
-      (                   # capture attribute value
-        (?:               # switch
-          \$? \w+         # either match attribute=\$var or attribute=constant (without quotes)
-        |                 # or
-          "               # the next char is a double quote
-          [^"]*           # so consume everything until the next double quote
-          "
-        |                 # or
-          \'              # the next char is a single quote
-          [^\']*          # so consume everything until the next single quote (note: do not remove the space; PCRE *bug*)
-          \'
-        )                 # end switch
-      )                   # end capture
-      \s*                 # match trailing white space
-';
 }

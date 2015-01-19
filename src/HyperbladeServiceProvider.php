@@ -50,7 +50,7 @@ class HyperbladeServiceProvider extends ServiceProvider
     $app->singleton ('hyperblade.compiler', function ($app) {
       $cache = $app['config']['view.compiled'];
 
-      return new HyperbladeCompiler($app['files'], $cache);
+      return new HyperbladeCompiler($app['files'], $cache, $app->config['app.debug']);
     });
 
     /** @var EngineResolver $resolver */

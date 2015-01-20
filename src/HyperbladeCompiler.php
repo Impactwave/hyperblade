@@ -1,8 +1,11 @@
 <?php
+
 namespace contentwave\hyperblade;
 
-use RuntimeException, Illuminate\Support\Str, Illuminate\View\Compilers\BladeCompiler;
-use Illuminate\Filesystem\Filesystem;
+use RuntimeException,
+    Illuminate\Support\Str,
+    Illuminate\View\Compilers\BladeCompiler,
+    Illuminate\Filesystem\Filesystem;
 
 /**
  * This is an utility function for use within compiled templates.
@@ -52,16 +55,28 @@ function e ($o)
           else if (is_string ($v)) {
             $at[] = "$k:$v";
             $s = ';';
-          } else $at[] = $k;
+          }
+          else
+            $at[] = $k;
         $o = implode ($s, $at);
         break;
       case 'NULL':
         return '';
       default:
-        throw new \InvalidArgumentException("Can't output a value of type " . gettype ($o));
+        throw new \InvalidArgumentException ("Can't output a value of type " . gettype ($o));
     }
   }
   return htmlentities ($o, ENT_QUOTES, 'UTF-8', false);
+}
+
+/**
+ * Checks if a given PHP expression is syntatically valid.
+ * @param string $exp
+ * @return boolean
+ */
+function validatePHPExpressionSyntax ($exp)
+{
+  return eval ("return true;return $exp;");
 }
 
 /**
@@ -76,24 +91,24 @@ class HyperbladeCompiler extends BladeCompiler
    * Two capture groups will be added to the regex match containing the attribute name and valie.
    * @var string
    */
-  protected static $attributeCaptureRegEx =
-    ' \s*                 # match leading white space
-      ([\w\-\:]+) \s*     # capture attribute name and eventuak prefix
-      = \s*               # match = and eventual white space
-      (                   # capture attribute value
-        (?:               # switch
-          \$? \w+         # either match attribute=\$var or attribute=constant (without quotes)
-        |                 # or
-          "               # the next char is a double quote
-          [^"]*           # so consume everything until the next double quote
-          "
-        |                 # or
-          \'              # the next char is a single quote
-          [^\']*          # so consume everything until the next single quote (note: do not remove the space; PCRE *bug*)
-          \'
-        )                 # end switch
-      )                   # end capture
-      \s*                 # match trailing white space
+  protected static $attributeCaptureRegEx = '
+    \s*                 # match leading white space
+    ([\w\-\:]+) \s*     # capture attribute name and eventuak prefix
+    = \s*               # match = and eventual white space
+    (                   # capture attribute value
+      (?:               # switch
+        \$? \w+         # either match attribute=\$var or attribute=constant (without quotes)
+      |                 # or
+        "               # the next char is a double quote
+        [^"]*           # so consume everything until the next double quote
+        "
+      |                 # or
+        \'              # the next char is a single quote
+        [^\']*          # so consume everything until the next single quote (note: do not remove the space; PCRE *bug*)
+        \'
+      )                 # end switch
+    )                   # end capture
+    \s*                 # match trailing white space
 ';
 
   /**
@@ -101,11 +116,13 @@ class HyperbladeCompiler extends BladeCompiler
    * @var CompilationContext
    */
   protected $ctx;
+
   /**
    * Records which view templates were already compiled during the current request.
    * @var array Map of string => boolean.
    */
-  protected $wasCompiled = array();
+  protected $wasCompiled = array ();
+
   /**
    * If true the output will retain the original indentation and templates are always compiled (no caching).
    * If false, the output will discard indentation and compiled templates are cached.
@@ -121,23 +138,23 @@ class HyperbladeCompiler extends BladeCompiler
    * @param string $cachePath
    * @param bool $debugMode If true, the output will retain the original indentation, otherwise it will be minified.
    */
-  public function __construct (Filesystem $files, $cachePath, $debugMode = false)
+  public function __construct (Filesystem $files, $cachePath, $debugMode = false, $profile = false)
   {
     parent::__construct ($files, $cachePath);
     $this->debugMode = $debugMode;
+    $this->profile = $profile;
     $this->compilers = array_merge (
       [
         'Uses',
         'Namespaces',
         'Components',
-      ],
-      $this->compilers,
+      ], $this->compilers,
       [
         'ConfigBlocks',
         'ContentInjectors',
         'SimpleMacros',
         'BlockMacros',
-      ]);
+    ]);
     $this->setEchoFormat ('_h\e(%s)');
   }
 
@@ -148,7 +165,15 @@ class HyperbladeCompiler extends BladeCompiler
    */
   public function compile ($path = null)
   {
-    parent::compile ($path);
+    if ($this->profile) {
+      $t = microtime (true);
+      parent::compile ($path);
+      $d = round ((microtime (true) - $t) * 1000) / 1000;
+      $p = substr ($path, strlen (base_path ()));
+      echo "<script>console.group('PROFILER');console.log('$p was compiled in $d seconds.');console.groupEnd()</script>";
+    }
+    else
+      parent::compile ($path);
 
     if (!is_null ($this->cachePath))
       $this->wasCompiled[$path] = true;
@@ -196,15 +221,15 @@ class HyperbladeCompiler extends BladeCompiler
   {
     return preg_replace_callback ('/(?<!\w)(\s*)@use\s*\(\s*(\S+)\s*(?:as\s*([\w\-]+)\s*)?\)\s*$/m',
       function ($match) {
-        $match[] = ''; // the default namespace.
-        list (, $space, $FQN, $alias) = $match;
-        $this->ctx->registerNamespace ($alias, $FQN);
-        if ($alias) {
-          $alias = $this->ctx->getNormalizedPrefix ($alias);
-          $this->ctx->prolog[] = "use $FQN as $alias;";
-        }
-        return $space;
-      }, $view);
+      $match[] = ''; // the default namespace.
+      list (, $space, $FQN, $alias) = $match;
+      $this->ctx->registerNamespace ($alias, $FQN);
+      if ($alias) {
+        $alias = $this->ctx->getNormalizedPrefix ($alias);
+        $this->ctx->prolog[] = "use $FQN as $alias;";
+      }
+      return $space;
+    }, $view);
   }
 
   /**
@@ -235,12 +260,12 @@ class HyperbladeCompiler extends BladeCompiler
   {
     return preg_replace_callback ('/ \b xmlns:([\w\-]+) \s* = \s* (["\']) (.*?) \\2 \s* /x',
       function ($match) {
-        list (, $prefix, , $namespace) = $match;
-        $this->ctx->registerNamespace ($prefix, $namespace);
-        $prefix = Str::camel ($prefix);
-        $this->ctx->prolog[] = "use $namespace as $prefix;";
-        return ''; //suppress attribute
-      }, $view);
+      list (, $prefix,, $namespace) = $match;
+      $this->ctx->registerNamespace ($prefix, $namespace);
+      $prefix = Str::camel ($prefix);
+      $this->ctx->prolog[] = "use $namespace as $prefix;";
+      return ''; //suppress attribute
+    }, $view);
   }
 
   /**
@@ -267,11 +292,11 @@ class HyperbladeCompiler extends BladeCompiler
   {
     return preg_replace_callback ('/@config\s*^(.*?)^\s*@endconfig\s*/sm',
       function ($match) {
-        list (, $content) = $match;
-        $content = substr (preg_replace ('/^(\s*)(\S+?):(\s*)(\S+)\s*$/m', '$1\'$2\'=>$3$4,', $content), 0, -1);
-        $this->ctx->prolog[] = "\$my->config(array(\n$content\n));";
-        return ''; //suppress directive
-      }, $view);
+      list (, $content) = $match;
+      $content = substr (preg_replace ('/^(\s*)(\S+?):(\s*)(\S+)\s*$/m', '$1\'$2\'=>$3$4,', $content), 0, -1);
+      $this->ctx->prolog[] = "\$my->config(array(\n$content\n));";
+      return ''; //suppress directive
+    }, $view);
   }
 
   /**
@@ -291,9 +316,9 @@ class HyperbladeCompiler extends BladeCompiler
   {
     return preg_replace_callback ($this->createPlainMatcher ('content'),
       function ($match) {
-        list (, $leadSpace, $trailSpace) = $match;
-        return "$leadSpace<?php echo \$my->getContent() ?>$trailSpace";
-      }, $view);
+      list (, $leadSpace, $trailSpace) = $match;
+      return "$leadSpace<?php echo \$my->getContent() ?>$trailSpace";
+    }, $view);
   }
 
   /**
@@ -318,7 +343,6 @@ class HyperbladeCompiler extends BladeCompiler
    * @param string $view
    * @return string
    */
-
   protected function compileSimpleMacros ($view)
   {
     $allends = sprintf ($this->ctx->MACRO_END, '(?:[\w\-]+' . $this->ctx->MACRO_ALIAS_DELIMITER . ')?', '(?:[\w\-]+)');
@@ -338,27 +362,28 @@ class HyperbladeCompiler extends BladeCompiler
         (?! \s*\( )                                           # must not have skipped the arguments list
         /sxm',
       function ($match) {
-        array_push ($match, ''); // allow $args to be undefined.
-        list ($all, $space, $alias, $method, $args) = $match;
+      array_push ($match, ''); // allow $args to be undefined.
+      list ($all, $space, $alias, $method, $args) = $match;
 
-        preg_match ('/[\n\r]([ \t]*)$/', $space, $m);
-        $indent = isset($m[1]) ? $m[1] : '';
+      preg_match ('/[\n\r]([ \t]*)$/', $space, $m);
+      $indent = isset ($m[1]) ? $m[1] : '';
 
-        if ($alias)
-          $alias = substr ($alias, 0, -strlen ($this->ctx->MACRO_ALIAS_DELIMITER));
-        $method = Str::camel ($method);
-        $class = $this->ctx->getNormalizedPrefix ($alias);
+      if ($alias)
+        $alias = substr ($alias, 0, -strlen ($this->ctx->MACRO_ALIAS_DELIMITER));
+      $method = Str::camel ($method);
+      $class = $this->ctx->getNormalizedPrefix ($alias);
 
-        $c = substr_count ($args, ',');
-        $realClass = $this->ctx->getNamespace ($alias);
-        $info = new \ReflectionMethod($realClass, $method);
-        $r = $info->getNumberOfRequiredParameters ();
-        if ($c < $r)
-          throw new RuntimeException ("Error on macro call: $all\n\nThe corresponding method $realClass::$method must have at least $r arguments, this call generates $c arguments.\nPlease check the method/call signatures.");
+      $c = substr_count ($args, ',');
+      $realClass = $this->ctx->getNamespace ($alias);
+      $info = new \ReflectionMethod ($realClass, $method);
+      $r = $info->getNumberOfRequiredParameters ();
+      if ($c < $r)
+        throw new RuntimeException ("Error on macro call: $all\n\nThe corresponding method $realClass::$method must have at least $r arguments, this call generates $c arguments.\nPlease check the method/call signatures.");
 
-        if (!$class) $class = $this->ctx->getNamespace ('');
-        return "$space<?php _h\\out($class::$method($args),'$indent') ?> "; //trailing space is needed for formatting.
-      }, $view);
+      if (!$class)
+        $class = $this->ctx->getNamespace ('');
+      return "$space<?php _h\\out($class::$method($args),'$indent') ?> "; //trailing space is needed for formatting.
+    }, $view);
   }
 
   /**
@@ -386,7 +411,6 @@ class HyperbladeCompiler extends BladeCompiler
    * @param string $view
    * @return string
    */
-
   protected function compileBlockMacros ($view)
   {
     $end = $this->ctx->MACRO_PREFIX . sprintf ($this->ctx->MACRO_END, '\3', '\4');
@@ -413,31 +437,31 @@ class HyperbladeCompiler extends BladeCompiler
         ' . $end . '                                          # match the macro end tag
         /sxm',
       function ($match) {
-        list ($all, $space, $alias, $method, $args, $content) = $match;
-        preg_match ('/[\n\r]([ \t]*)$/', $space, $m);
+      list ($all, $space, $alias, $method, $args, $content) = $match;
+      preg_match ('/[\n\r]([ \t]*)$/', $space, $m);
 
-        $indent = isset($m[1]) ? $m[1] : '';
-        $alias = substr ($alias, 0, -strlen ($this->ctx->MACRO_ALIAS_DELIMITER));
+      $indent = isset ($m[1]) ? $m[1] : '';
+      $alias = substr ($alias, 0, -strlen ($this->ctx->MACRO_ALIAS_DELIMITER));
 
-        $method = Str::camel ($method);
-        $class = $this->ctx->getNormalizedPrefix ($alias);
-        if ($args != '')
-          $args = ",$args";
-        $content = $this->compileBlock (rtrim ($content), $this->ctx);
+      $method = Str::camel ($method);
+      $class = $this->ctx->getNormalizedPrefix ($alias);
+      if ($args != '')
+        $args = ",$args";
+      $content = $this->compileBlock (rtrim ($content), $this->ctx);
 
-        $c = 1 + substr_count ($args, ',');
-        $realClass = $this->ctx->getNamespace ($alias);
-        $info = new \ReflectionMethod($realClass, $method);
-        $r = $info->getNumberOfRequiredParameters ();
-        if ($c < $r)
-          throw new RuntimeException ("Error on macro call:\n$all\n\nThe corresponding method $realClass::$method must have at least $r arguments, this call generates $c arguments.\nPlease check the method/call signatures.");
+      $c = 1 + substr_count ($args, ',');
+      $realClass = $this->ctx->getNamespace ($alias);
+      $info = new \ReflectionMethod ($realClass, $method);
+      $r = $info->getNumberOfRequiredParameters ();
+      if ($c < $r)
+        throw new RuntimeException ("Error on macro call:\n$all\n\nThe corresponding method $realClass::$method must have at least $r arguments, this call generates $c arguments.\nPlease check the method/call signatures.");
 
-        if (strpos ($content, '<?') === false) {
-          $content = str_replace ("'", "\\'", $content);
-          return "$space<?php _h\\out($class::$method('$content'$args),'$indent') ?> "; //trailing space is needed for formatting.
-        }
-        return "$space<?php ob_start() ?>$content<?php _h\\out($class::$method(ob_get_clean()$args),'$indent') ?> "; //trailing space is needed for formatting.
-      }, $view);
+      if (strpos ($content, '<?') === false) {
+        $content = str_replace ("'", "\\'", $content);
+        return "$space<?php _h\\out($class::$method('$content'$args),'$indent') ?> "; //trailing space is needed for formatting.
+      }
+      return "$space<?php ob_start() ?>$content<?php _h\\out($class::$method(ob_get_clean()$args),'$indent') ?> "; //trailing space is needed for formatting.
+    }, $view);
   }
 
   /**
@@ -498,86 +522,88 @@ class HyperbladeCompiler extends BladeCompiler
         <\/\2:\3>                               # consume the closing tag
       /smx',
       function ($match) {
-        list (, $indent, $prefix, $tag, $attrList, , , $content) = $match;
+      list (, $indent, $prefix, $tag, $attrList,,, $content) = $match;
 
-        // The reserved predefined prefix 'html' is used to promote a simple tag to a generic html component.
-        // This allows mixins on that tag to be recognized and applied.
-        // No PHP namespace needs to be associated with this special prefix, neither is the prefix registered.
+      // The reserved predefined prefix 'html' is used to promote a simple tag to a generic html component.
+      // This allows mixins on that tag to be recognized and applied.
+      // No PHP namespace needs to be associated with this special prefix, neither is the prefix registered.
 
-        if ($prefix == 'html') {
-          $attrList = " tag=\"$tag\"$attrList";
-          $tag = "html";
-          $prefix = '_h';
-        }
+      if ($prefix == 'html') {
+        $attrList = " tag=\"$tag\"$attrList";
+        $tag = "html";
+        $prefix = '_h';
+      }
 
-        // Find the component implementation.
+      // Find the component implementation.
 
-        $class = $this->ctx->getClass ($prefix, $tag);
-        $realClass = $this->ctx->getFQClass ($prefix, $tag);
-        $info = new \ReflectionMethod($realClass, '__construct');
-        if ($info->getNumberOfParameters () != 3)
-          throw new RuntimeException ("Component class $realClass's constructor must have 3 arguments.");
+      $class = $this->ctx->getClass ($prefix, $tag);
+      $realClass = $this->ctx->getFQClass ($prefix, $tag);
+      $info = new \ReflectionMethod ($realClass, '__construct');
+      if ($info->getNumberOfParameters () != 3)
+        throw new RuntimeException ("Component class $realClass's constructor must have 3 arguments.");
 
-        // Collect the tag's attributes.
+      // Collect the tag's attributes.
 
-        $attrs = [];
-        $mixins = [];
-        $attrsAsStr = '';
-        $mixinsList = '';
+      $attrs = [];
+      $mixins = [];
+      $attrsAsStr = '';
+      $mixinsList = '';
 
-        if ($attrList) {
-          preg_match_all ('/
-            ' . self::$attributeCaptureRegEx . '  # match attribute
-            /sxm', $attrList, $match2, PREG_SET_ORDER
-          );
+      if ($attrList) {
+        preg_match_all ('/
+          ' . self::$attributeCaptureRegEx . '  # match attribute
+          /sxm', $attrList, $match2, PREG_SET_ORDER
+        );
 
-          // Build the attributes map.
+        // Build the attributes map.
 
-          foreach ($match2 as $m) {
-            $m[] = null; // supply last match group if it's absent.
-            list (, $name, $val) = $m;
-            $quote = $val[0];
-            if ($quote == "'" || $quote == '"') {
-              $unquoted = htmlspecialchars_decode (substr ($val, 1, -1));
-              $val = $this->compileInterpolator ($unquoted, $quote);
-            }
-
-            // Process attribute directives.
-            // These are excluded from the $attrs map and included in the $mixins list.
-
-            $s = explode (':', $name, 2);
-            if (count ($s) == 2) {
-              list ($prefix, $name) = $s;
-              $mixinClass = $this->ctx->getClass ($prefix, $name);
-              $mixins[] = "new $mixinClass($val)";
-            } /*
-               If it's not a directive attribute, store it on the attributes map.
-              */
-            else $attrs[$name] = $val;
+        foreach ($match2 as $m) {
+          $m[] = null; // supply last match group if it's absent.
+          list (, $name, $val) = $m;
+          $quote = $val[0];
+          if ($quote == "'" || $quote == '"') {
+            $unquoted = html_entity_decode (substr ($val, 1, -1), ENT_QUOTES | ENT_HTML5);
+            $val = $this->compileInterpolator ($unquoted, $quote);
           }
 
-          $attrsAsStr = implode (',', array_map (function ($k, $v) {
+          // Process attribute directives.
+          // These are excluded from the $attrs map and included in the $mixins list.
+
+          $s = explode (':', $name, 2);
+          if (count ($s) == 2) {
+            list ($prefix, $name) = $s;
+            $mixinClass = $this->ctx->getClass ($prefix, $name);
+            $mixins[] = "new $mixinClass($val)";
+          } /*
+            If it's not a directive attribute, store it on the attributes map.
+           */
+          else
+            $attrs[$name] = $val;
+        }
+
+        $attrsAsStr = implode (',',
+          array_map (function ($k, $v) {
             return "'$k'=>$v";
           }, array_keys ($attrs), array_values ($attrs)));
 
-          if (!empty($mixins))
-            $mixinsList = "->mixin(" . implode (',', $mixins) . ")";
-        }
+        if (!empty ($mixins))
+          $mixinsList = "->mixin(" . implode (',', $mixins) . ")";
+      }
 
-        // Unindent the tag's content, subtracting from it the tag's indentation level.
-        $content = preg_replace ("/^$indent/m", '', $content);
-        // Recursively compile the content.
-        $content = $this->compileComponents ($content);
-        // Avoid using output buffers if not really necessary. If the content has no PHP code, pass it to the component
-        // as a simple string.
-        if (strpos ($content, '<?') === false && strpos ($content, $this->contentTags[0]) === false) {
-          // Escape single quotes.
-          $content = str_replace ("'", "\\'", $content);
-          return "$indent<?php _h\\out((new $class([$attrsAsStr],'$content',get_defined_vars())){$mixinsList}->run(),'$indent'); ?> "; //trailing space is needed for formatting.
-        }
-        // Use buffering to capture dynamic content and pass it to the component.
-        return "$indent<?php ob_start() ?>$content<?php _h\\out((new $class([$attrsAsStr],ob_get_clean(),get_defined_vars())){$mixinsList}->run(),'$indent'); ?> "; //trailing space is needed for formatting.
-      }, $view);
+      // Unindent the tag's content, subtracting from it the tag's indentation level.
+      $content = preg_replace ("/^$indent/m", '', $content);
+      // Recursively compile the content.
+      $content = $this->compileComponents ($content);
+      // Avoid using output buffers if not really necessary. If the content has no PHP code, pass it to the component
+      // as a simple string.
+      if (strpos ($content, '<?') === false && strpos ($content, $this->contentTags[0]) === false) {
+        // Escape single quotes.
+        $content = str_replace ("'", "\\'", $content);
+        return "$indent<?php _h\\out((new $class([$attrsAsStr],'$content',get_defined_vars())){$mixinsList}->run(),'$indent'); ?> "; //trailing space is needed for formatting.
+      }
+      // Use buffering to capture dynamic content and pass it to the component.
+      return "$indent<?php ob_start() ?>$content<?php _h\\out((new $class([$attrsAsStr],ob_get_clean(),get_defined_vars())){$mixinsList}->run(),'$indent'); ?> "; //trailing space is needed for formatting.
+    }, $view);
 
     --$this->ctx->nestingLevel;
 
@@ -598,100 +624,75 @@ class HyperbladeCompiler extends BladeCompiler
    */
   protected function compileInterpolator ($value, $quote)
   {
-    var_dump ("Compile: $value, quote: $quote ");
     $open = preg_quote ($this->contentTags[0]);
     $close = preg_quote ($this->contentTags[1]);
+    $segments = array ();
+    // Create an array of literal strings or interpolated expressions. Try to make it as small as possible by
+    // merging adjacent literal strings or by inserting native PHP interpolations into literal strings.
+    // Return value is irrelevant.
+    preg_replace_callback ("/
+        $open \\s* (.*?) \\s* $close  # capture interpolator
+        |                             # or
+        (?:(?!$open).)+               # capture literal text
+      /x",
+      // For each interpolation segment.
+      function ($match) use (&$segments) {
+      $match[] = '';
+      list ($all, $exp) = $match;
+      if (empty ($segments))
+        $last = null;
+      else
+        $last = &$segments[count ($segments) - 1];
 
-    $value = preg_replace_callback ('/
-       ^                              # start at the beginning
-       (                              # capture the attribute value
-         (?:                          # for each mixed text and interpolator fragment
-           (?:
-             (?!' . $open . ')        # while no next interpolator opening tag
-             .                        # consume text
-           )*?                        # until interpolator opening tag, optional
-           ' . $open . '              # must have an interpolator
-           (?!' . $close . ').*?      # consume text until interpolator closing tag
-           ' . $close . '             # consume the interpolator closing tag
-           (?:                        # while
-             (?!' . $open . ')        # no next interpolator opening tag
-             .                        # consume text
-           )*?                        # repeat, optional
-         )+                           # loop (consume remaining fragments)
-       )
-       /sx',
-      function ($match) use ($open, $close, $quote) {
-        list (, $value) = $match;
-        $atl = array();
+      // If it's not an interpolator, it's plain text.
 
-        // Create an array of literal strings or interpolated expressions. Try to make it as small as possible by
-        // merging adjacent literal strings or by inserting native PHP interpolations into literal strings.
+      if ($exp == '') {
+        // Escape double quotes and dollars.
+        $seg = str_replace (array (
+            '"',
+            '$'), array (
+            '\\"',
+            '\$'), $all);
+        // It the previous segment is a string, merge this string with it (optimize).
+        if (isset ($last) && $last[0] == '"')
+          $last = substr ($last, 0, -1) . $seg . '"';
+        // If this is the first segment or the last one is not a string, add this to the segment list.
+        else
+          $segments[] = '"' . $seg . '"';
+      } /*
+        If it's a simple interpolation {{$VAR}}, transform it into a PHP string interpolation.
+       */
+      else if (preg_match ('/^\$?\w+$/', $exp)) {
+        if (!isset ($last))
+        // If it's the first segment, just add it to the list.
+          $segments[] = $exp;
+        else {
+          // If the previous segment is a string, merge this one with it.
+          if ($last[0] == '"')
+            $last = substr ($last, 0, -1) . $exp . '"';
+          // The previous segment is not a string, so just append this one the list.
+          else
+            $segments[] = $exp;
+        }
+      } /*
+        Otherwise, it's a complex expression, so enclose it in quotes.
+       */
+      else
+        $segments[] = '(' . $exp . ')';
+    }, $value);
 
-        // Return value is irrelevant.
-        preg_replace_callback ("/
-                $open \\s* (.*?) \\s* $close  # capture interpolator
-                |                             # or
-                (?:(?!$open).)+               # capture literal text
-              /x",
+    // Simplify a single expression like `(exp)` to `exp`.
+    if (count ($segments) == 1 && preg_match ('/^\(.+\)$/', $segments[0]))
+      $segments = array (
+          substr ($segments[0], 1, -1));
 
-          // For each interpolation segment.
-
-          function ($match) use (&$atl) {
-            $match[] = '';
-            list ($all, $exp) = $match;
-            /*
-                        if ($quote == '"')
-                          $val = "'" . str_replace ("'", "\\'", $unquoted) . "'";
-                        else $val = '"' . $unquoted . '"';
-              */
-
-            // If it's not an interpolator, it's plain text.
-
-            if (empty($atl))
-              $last = null;
-            else $last = &$atl[count ($atl) - 1];
-            if ($exp == '') {
-              // Escape double quotes and dollars.
-              $seg = str_replace (array('"', '$'), array('\\"', '\$'), $all);
-              // It the previous segment is a string, merge this string with it (optimize).
-              if (isset($last) && $last[0] == '"')
-                $last = substr ($last, 0, -1) . $seg . '"';
-              // If this is the first segment or the last one is not a string, add this to the segment list.
-              else $atl[] = '"' . $seg . '"';
-            } /*
-                If it's a simple interpolation {{$VAR}}, transform it into a PHP string interpolation.
-            */
-            else if (preg_match ('/^\$?\w+$/', $exp)) {
-              if (!isset($last))
-                // If it's the first segment, just add it to the list.
-                $atl[] = $exp;
-              else {
-                // If the previous segment is a string, merge this one with it.
-                if ($last[0] == '"')
-                  $last = substr ($last, 0, -1) . $exp . '"';
-                // The previous segment is not a string, so just append this one the list.
-                else $atl[] = $exp;
-              }
-            } /*
-              Otherwise, it's a complex expression, so enclose it in quotes.
-            */
-            else $atl[] = '(' . $exp . ')';
-          }, $value);
-
-        var_dump ("Before: ", $atl);
-        // Simplify a single expression like "$var" to $var, or (exp) to exp.
-        if (count ($atl) == 1 && preg_match ('/^"\$?\w+"$|^\(.+\)$/', $atl[0]))
-          $atl = array(substr ($atl[0], 1, -1));
-        // At this point $atl contains items either starting with '"' (literal string), '(' (complex expressions)
-        // or '$' (variable name).
-        // Generate PHP string interpolator.
-        $value = implode ('.', $atl);
-        // Mark attribute as being interpolated, it will be handled in a special way on the component processing stage.
-        return $value;
-      }, $value);
-    var_dump ("CHANGED TO:\n$value\n");
-    echo "<hr>";
-    return $value;
+    // At this point $segments contains items either starting with '"' (literal string), '(' (complex expressions)
+    // or '$' (variable name).
+    // Generate PHP string interpolator.
+    $exp = implode ('.', $segments);
+    if (!validatePHPExpressionSyntax ($exp))
+      throw new RuntimeException ("Syntax error on interpolated attribute value: $value\nCompiled PHP expression: $exp");
+    return $exp;
   }
 
   /**
@@ -720,7 +721,7 @@ class HyperbladeCompiler extends BladeCompiler
    */
   public function isExpired ($path)
   {
-    return $this->debugMode ?: (isset($this->wasCompiled[$path]) ? false : parent::isExpired ($path));
+    return $this->debugMode ? : (isset ($this->wasCompiled[$path]) ? false : parent::isExpired ($path));
   }
 
 }

@@ -204,9 +204,7 @@ class HyperbladeCompiler extends BladeCompiler
   {
     $this->ctx = new CompilationContext;
     $out = parent::compileString ($view);
-    $out = $this->ctx->postProcess ($out);
-    $indenter = new \Gajus\Dindent\Indenter('**');
-    return $indenter->indent ($out);
+    return $this->ctx->postProcess ($out);
   }
 
   /**

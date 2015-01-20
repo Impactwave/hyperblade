@@ -41,16 +41,17 @@ class HyperbladeServiceProvider extends ServiceProvider
   public function register ()
   {
     $app = $this->app;
+    $debug = $app->config['app.debug'];
 
     AliasLoader::getInstance ()->alias ("Hyperblade", 'contentwave\hyperblade\HyperbladeCompiler');
 
     // The Compiler engine requires an instance of the CompilerInterface, which in
     // this case will be the Hyperblade compiler, so we'll first create the compiler
     // instance to pass into the engine so it can compile the views properly.
-    $app->singleton ('hyperblade.compiler', function ($app) {
+    $app->singleton ('hyperblade.compiler', function ($app) use ($debug) {
       $cache = $app['config']['view.compiled'];
 
-      return new HyperbladeCompiler($app['files'], $cache, $app->config['app.debug'], $app->config['app.profile']);
+      return new HyperbladeCompiler($app['files'], $cache, $debug, $app->config['app.profile']);
     });
 
     /** @var EngineResolver $resolver */
@@ -62,6 +63,9 @@ class HyperbladeServiceProvider extends ServiceProvider
     /** @var Factory $factory */
     $factory = $app['view'];
     $factory->addExtension ('hyper.php', 'hyperblade');
+
+    if ($debug)
+      $app['Illuminate\Contracts\Http\Kernel']->addMiddleware ('contentwave\hyperblade\PrettifyMiddleware');
   }
 
   /**

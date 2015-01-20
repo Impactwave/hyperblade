@@ -9,7 +9,8 @@
         }
     ],
     "require": {
-        "php": ">=5.4.0"
+        "php": ">=5.4.0",
+        "gajus/dindent": "2.0.*"
     },
     "autoload": {
         "psr-4": {

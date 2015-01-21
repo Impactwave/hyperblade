@@ -2,15 +2,18 @@
 
 namespace contentwave\hyperblade;
 
-use Closure;
-use Illuminate\Contracts\Routing\Middleware;
+use Closure,
+  Gajus\Dindent\Indenter,
+  Illuminate\Contracts\Routing\Middleware,
+  Illuminate\Http\Request,
+  Illuminate\Http\Response;
 
 class PrettifyMiddleware implements Middleware
 {
   /**
    * Handle an incoming request.
    *
-   * @param \Illuminate\Http\Request $request
+   * @param Request $request
    * @param \Closure $next
    * @return mixed
    */
@@ -24,7 +27,7 @@ class PrettifyMiddleware implements Middleware
     //modify the request here or whatever
     //you want before handling the request.
 
-    /* @var $response \Illuminate\Http\Response */
+    /* @var $response Response */
     $response = $next ($request);
 
     //after portion of the middleware.
@@ -34,7 +37,7 @@ class PrettifyMiddleware implements Middleware
 
     if ($profile) {
       $content = $response->getContent ();
-      $indenter = new \Gajus\Dindent\Indenter (['indentation_character' => '  ']);
+      $indenter = new Indenter (['indentation_character' => '  ']);
       $content = $indenter->indent ($content);
 
       $d = round ((microtime (true) - $t) * 1000) / 1000;

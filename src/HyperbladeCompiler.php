@@ -65,6 +65,33 @@ function validatePHPExpressionSyntax ($exp)
   return eval ("return true;return $exp;");
 }
 
+function minify ($template)
+{
+  $s = '';
+  foreach (token_get_all ($template) as $token) {
+    $s .= is_array ($token) ? parseToken ($token) : $token;
+  }
+  return $s;
+}
+
+function parseToken ($token)
+{
+  list($id, $s) = $token;
+
+  if ($id == T_INLINE_HTML)
+    $s = preg_replace_callback ('/^(\s)\s*|(\s)\s*(?=<)|(?<=>)(\s)\s*|(\s)\s*$/', function ($m) {
+      $c = isset($m[1]) ? $m[1] : '';
+      $c .= isset($m[2]) ? $m[2] : '';
+      $c .= isset($m[3]) ? $m[3] : '';
+      $c .= isset($m[4]) ? $m[4] : '';
+      return $c == ' ' ? ' ' : '';
+    }, $s);
+  elseif ($id == T_CLOSE_TAG)
+    $s = rtrim ($s);
+
+  return $s;
+}
+
 /**
  * An extension to the Blade templating engine that provides macros and components.
  */
@@ -177,7 +204,10 @@ class HyperbladeCompiler extends BladeCompiler
   {
     $this->ctx = new CompilationContext;
     $out = parent::compileString ($view);
-    return $this->ctx->postProcess ($out);
+    $out = $this->ctx->postProcess ($out);
+    if (!$this->debugMode)
+      return minify ($out);
+    return $out;
   }
 
   /**

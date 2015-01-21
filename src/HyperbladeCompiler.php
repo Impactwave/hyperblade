@@ -8,20 +8,6 @@ use RuntimeException,
     Illuminate\Filesystem\Filesystem;
 
 /**
- * This is an utility function for use within compiled templates.
- *
- * Adds the given space to the beginning of each line in the input string, except for the first line.
- * Then it outputs the resulting string.
- *
- * @param string $str
- * @param string $space
- */
-function out ($str, $space)
-{
-  echo substr (preg_replace ('/^/m', $space, $str), strlen ($space));
-}
-
-/**
  * Escapes (secures) data for output.<br>
  * Hyperblade extends Blade's output escaping with support for additional data types.
  *
@@ -156,19 +142,6 @@ class HyperbladeCompiler extends BladeCompiler
         'BlockMacros',
     ]);
     $this->setEchoFormat ('_h\e(%s)');
-  }
-
-  /**
-   * Applies formatting for wrapping macros/components code invocation.
-   * When running in debug mode, it wraps the component with a _h\out call and prepends indentation space.
-   *
-   * @param string $space
-   * @param string $exp
-   * @return string
-   */
-  protected function decorateOutputCode ($space, $exp)
-  {
-    return $this->debugMode ? sprintf ($exp, $space, '_h\\out(', ",'$space')") : sprintf ($exp, '', 'echo ', '');
   }
 
   /**
@@ -395,7 +368,7 @@ class HyperbladeCompiler extends BladeCompiler
 
       if (!$class)
         $class = $this->ctx->getNamespace ('');
-      return $this->decorateOutputCode ($space, "%s<?php %s$class::$method($args)%s ?> "); //trailing space is needed for formatting.
+      return "$space<?php echo $class::$method($args) ?>";
     }, $view);
   }
 
@@ -471,10 +444,9 @@ class HyperbladeCompiler extends BladeCompiler
 
       if (strpos ($content, '<?') === false) {
         $content = str_replace ("'", "\\'", $content);
-        return $this->decorateOutputCode ($space, "%s<?php %s$class::$method('$content'$args)%s ?> "); //trailing space is needed for formatting.
+        return "$space<?php echo $class::$method('$content'$args) ?>";
       }
-      return $this->decorateOutputCode ($space,
-        "<?php ob_start() ?>$content<?php %s$class::$method(ob_get_clean()$args)%s ?> "); //trailing space is needed for formatting.
+      return "$space<?php ob_start() ?>$content<?php echo $class::$method(ob_get_clean()$args) ?>";
     }, $view);
   }
 
@@ -525,7 +497,6 @@ class HyperbladeCompiler extends BladeCompiler
           )*                                    # repeat for each attribute found
         )                                       # end capture
         >                                       # match the tag closing delimiter
-        (?: \n\s*)?                             # if present, supress line break and additional space
         (                                       # capture the tag\'s content
           (?:                                   # loop begin
             (?=<\2:\3[\s>])                     # either the same tag is opened again
@@ -537,7 +508,7 @@ class HyperbladeCompiler extends BladeCompiler
         <\/\2:\3>                               # consume the closing tag
       /smx',
       function ($match) {
-      list (, $indent, $prefix, $tag, $attrList,,, $content) = $match;
+      list (, $space, $prefix, $tag, $attrList,,, $content) = $match;
 
       // The reserved predefined prefix 'html' is used to promote a simple tag to a generic html component.
       // This allows mixins on that tag to be recognized and applied.
@@ -606,8 +577,6 @@ class HyperbladeCompiler extends BladeCompiler
           $mixinsList = "->mixin(" . implode (',', $mixins) . ")";
       } // End of attributes processing block.
       //
-      // Unindent the tag's content, subtracting from it the tag's indentation level.
-      $content = preg_replace ("/^$indent/m", '', $content);
 
       // Recursively compile the content.
       $content = $this->compileComponents ($content);
@@ -618,11 +587,11 @@ class HyperbladeCompiler extends BladeCompiler
         // Escape single quotes.
         $content = str_replace ("'", "\\'", $content);
         $content = trim ($content);
-        return $this->decorateOutputCode ($indent, "%s<?php %s(new $class([$attrsAsStr],'$content',get_defined_vars())){$mixinsList}->run()%s ?> "); //trailing space is needed for formatting.
+        return "$space<?php echo (new $class([$attrsAsStr],'$content',get_defined_vars())){$mixinsList}->run() ?>";
       }
 
       // Otherwise, use buffering to capture dynamic content and pass it to the component.
-      return $this->decorateOutputCode ($indent, "%s<?php ob_start() ?>$content$indent<?php %s(new $class([$attrsAsStr],ob_get_clean(),get_defined_vars())){$mixinsList}->run()%s ?> "); //trailing space is needed for formatting.
+      return "$space<?php ob_start() ?>$content<?php echo (new $class([$attrsAsStr],ob_get_clean(),get_defined_vars())){$mixinsList}->run() ?>";
     }, $view);
 
     --$this->ctx->nestingLevel;

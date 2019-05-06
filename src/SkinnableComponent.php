@@ -10,7 +10,7 @@ class SkinnableComponent extends Component
 {
   /**
    * Override this to set the view template for your custom component.
-   * That can be done statically for the class or dinamically for each instance.
+   * That can be done statically for the class or dynamically for each instance.
    * @var string
    */
   protected $templateName;

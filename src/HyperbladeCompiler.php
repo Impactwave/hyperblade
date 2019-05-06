@@ -56,7 +56,7 @@ function e ($o)
 }
 
 /**
- * Checks if a given PHP expression is syntatically valid.
+ * Checks if a given PHP expression is syntactically valid.
  * @param string $exp
  * @return boolean
  */
@@ -101,16 +101,16 @@ class HyperbladeCompiler extends BladeCompiler
    * Regular Expression pattern fragment for extracting one attribute from a tag.
    * Insert this after the tag name capture.
    * The host regex must have /sx options.
-   * Two capture groups will be added to the regex match containing the attribute name and valie.
+   * Two capture groups will be added to the regex match containing the attribute name and value.
    * @var string
    */
   protected static $attributeCaptureRegEx = '
     \s*                 # match leading white space
-    ([\w\-\:]+) \s*     # capture attribute name and eventuak prefix
+    ([\w\-\:]+) \s*     # capture attribute name and eventual prefix
     = \s*               # match = and eventual white space
     (                   # capture attribute value
       (?:               # switch
-        \$? \w+         # either match attribute=\$var or attribute=constant (without quotes)
+        \$? \w+         # either match attribute=$var or attribute=constant (without quotes)
       |                 # or
         "               # the next char is a double quote
         [^"]*           # so consume everything until the next double quote

@@ -17,7 +17,7 @@ abstract class Component
   /**
    * The component's tag name.
    * This is initially set to `static::$tagName`.
-   * It can be dinamically set at runtime to change the way the component is output, for some component types.
+   * It can be dynamically set at runtime to change the way the component is output, for some component types.
    * @var string
    */
   public $tag;
@@ -138,7 +138,7 @@ abstract class Component
   }
 
   /**
-   * Returns the component's dinamically generated content or, if none is provided by the component subclass, it
+   * Returns the component's dynamically generated content or, if none is provided by the component subclass, it
    * returns the original transcluded content from the view.
    *
    * This is called by the '@ content' directive.
